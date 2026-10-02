@@ -16,6 +16,20 @@
 
 输入框下方**刻意不显示任何东西**——同一份合计不重复出现。
 
+## 截图
+
+| 侧栏底部（两行徽标） | 明细面板 |
+|---|---|
+| ![徽标](assets/screenshot-1-badge.png) | ![面板](assets/screenshot-2-panel.png) |
+
+深色主题：
+
+![深色](assets/screenshot-3-dark.png)
+
+> 截图由 `node tools/render-panel.mjs` 生成：把**真实组件**渲染成 HTML（主题变量取自本机安装的
+> `dsh-client-ui-theme`，用 `node tools/extract-theme.cjs` 抽出），再用无头 Chrome 出图。
+> **图中的任务是虚构样本**，不是任何人的真实用量与费用。
+
 ## 快速上手
 
 1. 装：`dsh plugin --profile desktop add github:wojiao42/dsh-token-cost`（或从插件市场安装），刷新页面。
@@ -101,7 +115,11 @@ profile 的 `package.json` 里登记为组合包（**必须**用 pnpm 的 `link:
 | `cordis.patch.yml` | 组合包 patch：插入 `token-cost` 行（`name` 必须等于包名） |
 | `tools/plugin-summary-test.cjs` | 30 项离线断言（假 React/ReactDOM/hook harness，不需要浏览器） |
 | `tools/verify-live.cjs` | 检查运行中的 Host 是否已在提供当前版本 |
+| `tools/extract-theme.cjs` | 从本机 `app.asar` 抽出主题样式表（纯 node 读 asar），供出图用 |
+| `tools/render-panel.mjs` | 把真实组件渲染成 HTML + 无头 Chrome 出商店截图 |
+| `tools/lib/harness.mjs` | 离线 harness：假 React/ReactDOM + `client.js` 加载器 |
 | `tools/publish.mjs` | GitHub 侧发布：建仓 + 推送 + topic + 收录条目，见 `PUBLISHING.md` |
+| `screenshots.json` · `assets/` | 商店页截图声明与图片 |
 
 ## 改完代码怎么生效
 

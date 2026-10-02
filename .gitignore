@@ -6,5 +6,8 @@ Thumbs.db
 # 出截图时的中间 HTML（PNG 是产物，HTML 可随时用 tools/render-panel.mjs 重新生成）
 assets/*.html
 
+# 主题样式表由 tools/extract-theme.cjs 从本机安装里抽出（第三方 CSS，不进仓库）
+assets/theme.css
+
 # 发布令牌绝不能进仓库
 .gh-token
