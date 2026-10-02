@@ -1,0 +1,40 @@
+{
+  "name": "dsh-token-cost",
+  "version": "1.0.0",
+  "private": false,
+  "description": "DSH sidebar token ledger: live token usage and estimated cost for the current task and for every session combined, with cache-hit rate and a per-session breakdown.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "token",
+    "usage",
+    "cost",
+    "sidebar",
+    "session"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wojiao42/dsh-token-cost.git"
+  }
+}
