@@ -1,11 +1,13 @@
 // Verify the running Host serves the current build of the plugin: report the
 // artifact revision, the feature markers, and the registration counts.
 const fs = require('node:fs');
+const path = require('node:path');
 const crypto = require('node:crypto');
 
 const BASE = 'http://127.0.0.1:19387';
 const PKG = 'dsh-token-cost';
-const FILE = '<工作区根>/plugins/dsh-token-cost/client.js';
+// Client bundle to check: argv[2], else this repo's own client.js.
+const FILE = process.argv[2] ?? path.join(__dirname, '..', 'client.js');
 
 const framedHash = (domain, parts) => {
   const hash = crypto.createHash('sha1').update(domain).update('\0');
