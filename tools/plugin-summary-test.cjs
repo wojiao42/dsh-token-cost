@@ -196,6 +196,9 @@ const collect = (node, out = []) => {
   return out;
 };
 
+/** 时间戳随运行时刻变化，断言前把 HH:MM 归一化。 */
+const clockless = (text) => String(text).replace(/\d{2}:\d{2}/, 'HH:MM');
+
 // --- collapsed badge
 hooks.length = 0;
 setters = [];
@@ -205,10 +208,12 @@ const badge = render({ useSessions, t, openSession: (id) => opened.push(id), war
 const badgeNodes = collect(badge);
 const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').map((entry) => entry.text);
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('badge shows the total, the current task and the as-of clock',
-  [badgeKeys, badgeValues.slice(0, 2)],
-  [['全部', '当前', '截至'], ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']]);
-assert('as-of line is a local clock', /^\d{2}:\d{2}$/.test(badgeValues[2] ?? ''));
+assertEqual('badge shows two compact lines: total with the as-of clock, then the current task',
+  [badgeKeys, badgeValues.map(clockless)],
+  [['全部', '当前'], ['≈¥0.00658 · 截至 HH:MM', '≈¥0.00258 · 50.0%']]);
+assert('the as-of clock is a local HH:MM', / · 截至 \d{2}:\d{2}$/.test(badgeValues[0] ?? ''));
+assert('a running session shows as a dot on the total line',
+  collect(badge).some((entry) => entry.className === 'tcs-dot' && entry.node.props['data-running'] === 'true'));
 assert('badge uses summary icon', badgeNodes.some((entry) => entry.node.type === 'svg'));
 assert('no portal while collapsed', portals.length === 0);
 
@@ -300,7 +305,7 @@ assert('missing useSessions degrades to nothing', noHook === null || noHook === 
 const fakeSource = { getSnapshot: () => SESSIONS, subscribe: () => () => {} };
 const viaSource = render({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
 const viaSourceValues = collect(viaSource).filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']);
+assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2).map(clockless), ['≈¥0.00658 · 截至 HH:MM', '≈¥0.00258 · 50.0%']);
 
 // --- 悬停展开（点击 = 钉住）
 globalThis.__FORCE_OPEN__ = false;

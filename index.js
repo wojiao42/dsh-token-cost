@@ -10,7 +10,7 @@
  *     → { sessionId, totalTurns, truncated, turns: [{ turn, startTime, endTime, steps, closed, usage }] }
  *       `usage` 为 null 表示该轮用量无法证明（活动未闭合或计数不安全），与官方折叠语义一致。
  *
- * 冷会话走 `ctx.sessionQuery.read()`（持久化日志读取），活跃会话走同一接口的 live 分支。
+ * 走 `ctx.sessionQuery.readSession()`：活跃会话读 live 日志，冷会话读持久化日志，返回已验证的克隆事件。
  */
 
 /** 默认返回的轮数上限（只回最近几轮，避免一次读太长）。 */
@@ -102,27 +102,21 @@ export function apply(ctx, config = {}) {
     if (refresh !== true && cached !== undefined && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload;
     const query = ctx.get('sessionQuery');
     if (query === undefined) throw new Error('sessionQuery unavailable');
-    const lease = await query.read(sessionId, { projectionMode: 'none' });
-    try {
-      const fold = typeof config.fold === 'function' ? config.fold : await loadFold();
-      const turns = foldTurns(lease.events ?? [], fold);
-      const selected = turns.slice(Math.max(0, turns.length - limit));
-      const payload = {
-        sessionId,
-        totalTurns: turns.length,
-        truncated: selected.length < turns.length,
-        folded: typeof fold === 'function',
-        turns: selected,
-      };
-      cache.set(sessionId, { at: Date.now(), payload });
-      return payload;
-    } finally {
-      try {
-        lease?.[Symbol.dispose]?.();
-      } catch {
-        /* 释放失败不影响结果 */
-      }
-    }
+    if (typeof query.readSession !== 'function') throw new Error('sessionQuery.readSession unavailable');
+    // readSession: 读并校验整份会话日志（活跃会话走 live，冷会话走持久化），返回克隆过的事件
+    const { events } = await query.readSession(sessionId);
+    const fold = typeof config.fold === 'function' ? config.fold : await loadFold();
+    const turns = foldTurns(events ?? [], fold);
+    const selected = turns.slice(Math.max(0, turns.length - limit));
+    const payload = {
+      sessionId,
+      totalTurns: turns.length,
+      truncated: selected.length < turns.length,
+      folded: typeof fold === 'function',
+      turns: selected,
+    };
+    cache.set(sessionId, { at: Date.now(), payload });
+    return payload;
   }
 
   ctx.inject(['webServer'], (host) => {

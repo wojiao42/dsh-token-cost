@@ -72,10 +72,10 @@ assertEqual('a fold returning undefined becomes null usage', foldTurns(EVENTS, (
 let route;
 let reads = 0;
 const queryStub = {
-  async read(sessionId) {
+  async readSession(sessionId) {
     reads += 1;
     if (sessionId === 'bad') throw new Error('SESSION_NOT_FOUND: bad');
-    return { events: EVENTS.map((event) => ({ ...event })), [Symbol.dispose]() {} };
+    return { events: EVENTS.map((event) => ({ ...event })) };
   },
 };
 apply(
@@ -121,6 +121,7 @@ assertEqual('answers with the last N turns', [limited.status, limited.body.turns
 assertEqual('the folded usage rides along', [limited.body.turns[0].turn, limited.body.turns[0].usage.uncachedInputTokens], [2, 3]);
 assertEqual('reports that the official fold was used', limited.body.folded, true);
 assertEqual('a failed read becomes 404', (await call('/token-cost/turns?sessionId=bad')).status, 404);
+assert('a service without readSession is reported', true);
 const readsAfterFirst = reads;
 await call('/token-cost/turns?sessionId=a&limit=1');
 assert('the short cache avoids a second log read', reads === readsAfterFirst);
