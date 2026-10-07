@@ -537,50 +537,69 @@ window.__ModuleLoader__.load({
      * 会由轨道自己 loadThrough 之后再落位。刻度还没渲染出来就轮询等一会儿；
      * 一直找不到（比如会话只有一轮、或平台改了文案）就安静放弃，不报错。
      */
+    /** 等活动刻度稳定（连续若干次读到同一轮才算落定）：平滑滚动期间它是滞后的。 */
+    const JUMP_SETTLE_TRIES = 60;
+    const JUMP_SETTLE_STABLE = 4;
+
     function jumpToTurn(turn, options = {}) {
       const report = typeof options.report === 'function' ? options.report : () => {};
-      let waited = options.delayMs ?? 0;
-      const attempt = (left, candidates, index) => {
-        if (candidates === null) {
-          if (turnRail() === null && left > 0) {
-            setTimeout(() => attempt(left - 1, null, 0), JUMP_POLL_MS);
+      let calibrations = 0;
+
+      /** 等落点稳定后回调最终轮号（读不到返回 null）。 */
+      const settle = (left, callback) => {
+        let last;
+        let stable = 0;
+        const step = (remaining) => {
+          const now = activeRailTurn();
+          if (now === null) {
+            if (remaining > 0) setTimeout(() => step(remaining - 1), JUMP_POLL_MS);
+            else callback(null);
             return;
           }
-          const found = findTurnMarks(turn);
-          if (found.length === 0) {
-            if (left <= 0) {
-              report({ kind: 'missing' });
-              return;
-            }
-            setTimeout(() => attempt(left - 1, null, 0), JUMP_POLL_MS);
-            return;
+          if (now === last) stable += 1;
+          else {
+            last = now;
+            stable = 0;
           }
-          attempt(left, found, 0);
-          return;
-        }
-        if (index >= candidates.length) {
-          const landed = activeRailTurn();
-          report(landed === null ? { kind: 'missing' } : { kind: 'wrong', landed });
-          return;
-        }
-        const mark = candidates[index];
-        if (typeof mark.click === 'function') mark.click();
-        // 点完看轨道把哪一轮标成活动：对了就收工，错了换下一个候选
-        const verify = (leftTries) => {
-          const landed = activeRailTurn();
-          if (landed === turn) {
-            report({ kind: 'ok' });
-            return;
-          }
-          if (leftTries > 0) {
-            setTimeout(() => verify(leftTries - 1), JUMP_POLL_MS);
-            return;
-          }
-          attempt(0, candidates, index + 1);
+          if (stable >= JUMP_SETTLE_STABLE || remaining <= 0) callback(last);
+          else setTimeout(() => step(remaining - 1), JUMP_POLL_MS);
         };
-        setTimeout(() => verify(12), JUMP_POLL_MS);
+        setTimeout(() => step(left), JUMP_POLL_MS);
       };
-      const start = () => attempt(JUMP_POLL_TRIES, null, 0);
+
+      const attempt = (number, left) => {
+        const marks = findTurnMarks(number);
+        if (marks.length === 0) {
+          if (left > 0) {
+            setTimeout(() => attempt(number, left - 1), JUMP_POLL_MS);
+            return;
+          }
+          report({ kind: 'missing' });
+          return;
+        }
+        if (typeof marks[0].click === 'function') marks[0].click();
+        settle(JUMP_SETTLE_TRIES, (landed) => {
+          if (landed === number) {
+            report(number === turn ? { kind: 'ok' } : { kind: 'ok', calibrated: number });
+            return;
+          }
+          if (landed === null) {
+            report({ kind: 'missing' });
+            return;
+          }
+          // 自适应校准：轨道落点与刻度号有固定偏差时，按偏差纠正一次
+          const corrected = number + (number - landed);
+          if (calibrations < 2 && corrected !== number && corrected > 0) {
+            calibrations += 1;
+            attempt(corrected, 0);
+            return;
+          }
+          report({ kind: 'wrong', landed });
+        });
+      };
+
+      const start = () => attempt(turn, JUMP_POLL_TRIES);
+      const waited = options.delayMs ?? 0;
       if (waited > 0) setTimeout(start, waited);
       else start();
     }
