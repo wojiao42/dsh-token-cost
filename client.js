@@ -566,6 +566,10 @@ window.__ModuleLoader__.load({
     const warmedJumpSessions = new Set();
     /** 预热后等轨道落位的时间。 */
     const JUMP_WARM_MS = 500;
+    /** 一次跳转里最多替用户翻几页"更早"（每页约 50 条消息 / 2 轮）。 */
+    const JUMP_PAGE_TRIES = 8;
+    /** 翻一页后等它渲染的时间。 */
+    const JUMP_PAGE_MS = 350;
 
     function jumpToTurn(turn, options = {}) {
       const ordinal = Number.isInteger(options.ordinal) ? options.ordinal : null;
@@ -587,47 +591,74 @@ window.__ModuleLoader__.load({
         return true;
       };
 
-      /** 轮询等目标刻度出现后点它。 */
-      const jumpTarget = (left) => {
+      /** 轮询等目标刻度出现后点它；还找不到就再翻一页更早的历史。 */
+      const jumpTarget = (left, pages) => {
         if (clickTarget()) return;
+        if (pages > 0) {
+          void pageOnce().then(() => setTimeout(() => jumpTarget(left, pages - 1), JUMP_PAGE_MS));
+          return;
+        }
         if (left <= 0) return;
-        setTimeout(() => jumpTarget(left - 1), JUMP_POLL_MS);
+        setTimeout(() => jumpTarget(left - 1, 0), JUMP_POLL_MS);
       };
 
       const settleAndJump = () => {
         if (sessionId !== null) warmedJumpSessions.add(sessionId);
-        jumpTarget(JUMP_POLL_TRIES);
+        jumpTarget(JUMP_POLL_TRIES, 2);
       };
 
-      // 已经热过：直接点目标
+      // 已经热过：直接点目标（还找不到就再翻页）
       if (sessionId === null || warmedJumpSessions.has(sessionId)) {
-        jumpTarget(JUMP_POLL_TRIES);
+        jumpTarget(JUMP_POLL_TRIES, JUMP_PAGE_TRIES);
         return;
       }
 
-      // 冷轨道：先点最前面那颗刻度（第 1 轮；渲染不出就点当前渲染出来的第一颗），再点目标
-      const warmUp = () => {
-        const rail = turnRail();
-        // 看不到轨道容器（页面结构不同/离线 harness）：别预热，直接点目标
-        if (rail === null) return 'no-rail';
-        const first = markByIndex(0) ?? rail.querySelector('button[aria-label]');
-        if (first === null) return false;
-        if (typeof first.click === 'function') first.click();
-        return true;
+      const pageOlder = typeof options.pageOlder === 'function' ? options.pageOlder : null;
+
+      /** 替用户翻一页"更早"：目标轮很可能还在未加载的历史里。 */
+      const pageOnce = () => {
+        if (pageOlder === null) return Promise.resolve(false);
+        try {
+          return Promise.resolve(pageOlder());
+        } catch {
+          return Promise.resolve(false);
+        }
       };
-      const warmAttempt = (left) => {
+
+      /**
+       * 预热：冷轨道的刻度不全。优先点第 1 轮那颗刻度（平台的"加载并跳转"会顺带把历史翻进来）；
+       * 第 1 轮刻度压根没渲染出来时，就自己翻页，直到它出现或翻到上限。
+       */
+      const warmUp = () => {
+        const first = markByIndex(0);
+        if (first !== null) {
+          if (typeof first.click === 'function') first.click();
+          return 'clicked';
+        }
+        return turnRail() === null ? 'no-rail' : 'missing';
+      };
+      const warmAttempt = (left, pages) => {
         const warmed = warmUp();
-        if (warmed === true) {
+        if (warmed === 'clicked') {
           setTimeout(settleAndJump, JUMP_WARM_MS);
           return;
         }
-        if (warmed === 'no-rail' || left <= 0) {
+        if (warmed === 'no-rail') {
           settleAndJump();
           return;
         }
-        setTimeout(() => warmAttempt(left - 1), JUMP_POLL_MS);
+        // 还看不到第 1 轮刻度：翻一页更早的历史再试
+        if (pages > 0) {
+          void pageOnce().then(() => setTimeout(() => warmAttempt(left, pages - 1), JUMP_PAGE_MS));
+          return;
+        }
+        if (left <= 0) {
+          settleAndJump();
+          return;
+        }
+        setTimeout(() => warmAttempt(left - 1, 0), JUMP_POLL_MS);
       };
-      warmAttempt(JUMP_POLL_TRIES);
+      warmAttempt(JUMP_POLL_TRIES, JUMP_PAGE_TRIES);
     }
 
     /**
@@ -727,7 +758,7 @@ window.__ModuleLoader__.load({
       return injected ?? (typeof useSessions === 'function' ? useSessions((state) => state) : undefined);
     }
 
-    function TokenCostSummary({ useSessions, t, openSession, warmProjections, sessionsSource, wide = true }) {
+    function TokenCostSummary({ useSessions, t, openSession, warmProjections, sessionsSource, loadOlder, wide = true }) {
       const sessions = useSessionsSnapshot(sessionsSource, useSessions);
       const summary = React.useMemo(() => aggregateSessions(sessions), [sessions]);
       const [open, setOpen] = React.useState(false);
@@ -1081,7 +1112,8 @@ window.__ModuleLoader__.load({
         jumpToTurn(turnNo, {
           ordinal: Number.isInteger(ordinal) ? ordinal : null,
           sessionId,
-          // 冷轨道先预热一次（复现"先点第一轮"），同一会话之后直接点目标
+          // 目标轮可能还在更早的历史里：需要时替用户点"加载更早"
+          pageOlder: typeof loadOlder === 'function' ? () => loadOlder(sessionId) : null,
         });
       };
 
@@ -1195,6 +1227,19 @@ window.__ModuleLoader__.load({
             inject: () => ({
               openSession: (sessionId) => ctx.get('uiWorkspace')?.openSession(sessionId),
               warmProjections: (sessionId) => ctx.sessions?.refreshProjections?.(sessionId),
+              // 等价于点聊天区"加载更早"：把该会话更早的历史页翻进来
+              loadOlder: async (sessionId) => {
+                const sessions = ctx.sessions;
+                if (typeof sessions?.using !== 'function') return false;
+                try {
+                  await sessions.using(sessionId, { source: 'token-cost' }, async (reference) => {
+                    await reference?.binding?.session?.loadOlder?.();
+                  });
+                  return true;
+                } catch {
+                  return false;
+                }
+              },
               sessionsSource: ctx.sessions.list,
             }),
           },

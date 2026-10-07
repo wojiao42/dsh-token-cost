@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-cost",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "private": false,
   "description": "DSH sidebar token ledger: live token usage and estimated cost for the current task and for every session combined, with cache-hit rate and a per-session breakdown.",
   "type": "module",
