@@ -133,13 +133,14 @@ window.__ModuleLoader__.load({
 
     const SUMMARY_CSS = [
       '.tcs-root{position:relative;display:inline-flex;align-items:center;min-width:0}',
-      '.tcs-pill{box-sizing:border-box;max-width:100%;display:inline-flex;align-items:center;gap:6px;cursor:pointer;',
-      'padding:4px 8px;border:none;border-radius:var(--dsw-radius-sm,8px);background:0 0;font:inherit;',
-      'font-size:var(--dsh-content-font-size-secondary,13px);line-height:1.4;color:var(--dsw-alias-label-tertiary);',
-      'white-space:nowrap;font-variant-numeric:tabular-nums}',
+      '.tcs-pill{box-sizing:border-box;max-width:100%;display:inline-flex;align-items:center;gap:5px;cursor:pointer;',
+      'padding:2px 6px;border:none;border-radius:var(--dsw-radius-sm,8px);background:0 0;font:inherit;',
+      'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:1.25;',
+      'color:var(--dsw-alias-label-tertiary);white-space:nowrap;font-variant-numeric:tabular-nums}',
       '.tcs-pill:hover,.tcs-pill[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
       '.tcs-pill svg{flex:none;width:14px;height:14px}',
-      '.tcs-lines{display:flex;flex-direction:column;gap:1px;min-width:0;text-align:left}',
+      '.tcs-lines{display:flex;flex-direction:column;gap:0;min-width:0;text-align:left}',
+      '.tcs-line .tcs-dot{flex:none;width:6px;height:6px;align-self:center}',
       '.tcs-line{display:flex;align-items:baseline;gap:6px;min-width:0;white-space:nowrap}',
       '.tcs-key{flex:none;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-value{min-width:0;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}',
@@ -360,7 +361,9 @@ window.__ModuleLoader__.load({
     const summaryIcon = () =>
       h(
         'svg',
-        { viewBox: '0 0 16 16', 'aria-hidden': true, focusable: false },
+        // 内在 width/height 不能省：只有 viewBox 的 SVG 在 CSS 尚未生效时会按替换元素
+        // 默认尺寸撑开，把侧栏徽标顶大（dsh-space-optimizer 上实测过这个毛病）。
+        { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': true, focusable: false },
         h('path', { d: 'M2.6 13.4V9.3h2.3v4.1zm4.4 0V6.1h2.3v7.3zm4.4 0V2.6h2.3v10.8z', fill: 'currentColor' }),
       );
 
@@ -644,9 +647,10 @@ window.__ModuleLoader__.load({
       const money = totals.cost > 0 ? '≈' + fmtMoney(totals.cost) : null;
       const currentId = currentSessionIdOf(sessions);
       const current = currentId === undefined ? undefined : summary.rows.find((row) => row.id === currentId);
+      const clock = totals.asOf > 0 ? fmtClock(totals.asOf) : null;
       const totalLine =
         (money ?? fmtCompact(totals.billed) + ' ' + tr('tokens')) +
-        (totals.running > 0 ? ' · ' + totals.running + ' ' + tr('running') : '');
+        (clock === null ? '' : ' · ' + tr('asOf') + ' ' + clock);
       const currentLine =
         current === undefined
           ? null
@@ -654,22 +658,21 @@ window.__ModuleLoader__.load({
               ? '≈' + fmtMoney(current.cost.total)
               : fmtCompact(current.billed) + ' ' + tr('tokens')) +
             (current.percent === null ? '' : ' · ' + fmtPercent(current.percent));
-      const badgeLine = (key, text, lineKey) =>
+      const badgeLine = (key, text, lineKey, running) =>
         h(
           'span',
           { className: 'tcs-line', key: lineKey },
           h('span', { className: 'tcs-key' }, tr(key)),
+          running === true ? h('span', { className: 'tcs-dot', 'data-running': 'true' }) : null,
           h('span', { className: 'tcs-value' }, text),
         );
       const now = Date.now();
-      const asOfLine = totals.asOf > 0 ? fmtClock(totals.asOf) : null;
       const label = wide
         ? h(
             'span',
             { className: 'tcs-lines' },
-            badgeLine('total', totalLine, 'total'),
+            badgeLine('total', totalLine, 'total', totals.running > 0),
             currentLine === null ? null : badgeLine('current', currentLine, 'current'),
-            asOfLine === null ? null : badgeLine('asOf', asOfLine, 'asOf'),
           )
         : h('span', { className: 'tcs-label' }, money ?? fmtCompact(totals.billed));
 
