@@ -63,18 +63,29 @@ function promptText(data) {
 export function turnsFromEvents(events) {
   const turns = [];
   let current = null;
-  // 触发该轮的那句人话：真人发言优先，找不到就用最近一条 user/message
-  let humanPrompt = null;
-  let anyPrompt = null;
+  // DSH 的顺序是「turn/start → 该轮的用户消息」，所以摘要要取**轮内**那句；
+  // 轮前那句只作兜底（注入轮/系统轮内部可能没有用户消息）。
+  let beforeHuman = null;
+  let beforeAny = null;
   for (const event of events) {
     if (event === null || typeof event !== 'object') continue;
     if (event.type === 'user/message') {
       const text = promptText(event.data);
       if (text !== null) {
-        anyPrompt = text;
-        if (event.data?.source?.clientTimeZone !== undefined) humanPrompt = text;
+        const human = event.data?.source?.clientTimeZone !== undefined;
+        if (current !== null) {
+          // 轮内：人话优先且取第一句；注入消息只在还没有人话时占位
+          if (human) {
+            if (current.humanSummary === null) current.humanSummary = text;
+          } else if (current.anySummary === null) {
+            current.anySummary = text;
+          }
+        } else if (human) {
+          beforeHuman = text;
+        } else {
+          beforeAny = text;
+        }
       }
-      if (current !== null && current.summary === null) current.summary = humanPrompt ?? anyPrompt;
       continue;
     }
     if (event.type === 'turn/start') {
@@ -84,7 +95,10 @@ export function turnsFromEvents(events) {
         endTime: null,
         steps: 0,
         toolCalls: 0,
-        summary: humanPrompt ?? anyPrompt,
+        humanSummary: null,
+        anySummary: null,
+        before: beforeHuman ?? beforeAny,
+        summary: null,
         closed: false,
         events: [event],
       };
@@ -98,8 +112,13 @@ export function turnsFromEvents(events) {
     if (event.type === 'turn/end') {
       current.endTime = typeof event.time === 'number' ? event.time : null;
       current.closed = true;
+      current.summary = current.humanSummary ?? current.anySummary ?? current.before ?? null;
       current = null;
     }
+  }
+  // 还在跑的那一轮（没有 turn/end）同样收尾
+  for (const turn of turns) {
+    if (turn.summary === null) turn.summary = turn.humanSummary ?? turn.anySummary ?? turn.before ?? null;
   }
   return turns;
 }
@@ -204,6 +223,17 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    // 会话首句（第一句人话）：放在预览最上面，方便一眼认出是哪个对话
+    const firstPrompt = (() => {
+      for (const event of events ?? []) {
+        if (event?.type !== 'user/message') continue;
+        if (event.data?.source?.clientTimeZone === undefined) continue;
+        const text = promptText(event.data);
+        if (text !== null) return text;
+      }
+      return null;
+    })();
+
     const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold), outline);
     const selected = turns.slice(Math.max(0, turns.length - limit));
     const payload = {
@@ -214,6 +244,7 @@ export function apply(ctx, config = {}) {
       folded: true,
       // 诊断用：投影里拿到几轮（null = 没拿到，退回日志编号）
       platformTurns: Array.isArray(outline) ? outline.length : null,
+      firstPrompt,
       probe,
       turns: selected,
     };

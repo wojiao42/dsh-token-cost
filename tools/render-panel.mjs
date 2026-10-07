@@ -290,6 +290,7 @@ function walk(node, out = []) {
 /** 逐轮预览用的假响应（虚构数据）。 */
 const TURNS = {
   sessionId: 's1',
+  firstPrompt: '帮我装一个 token 消耗的插件，最好能显示费用和百分比',
   totalTurns: 12,
   truncated: true,
   folded: true,
@@ -325,6 +326,9 @@ async function turnsPage(dark) {
 
   // 自检 1：锚定错了就报错，别悄悄出一张错的图。
   // 注意别写死属性顺序：浮层后来多了 id，`<div class=...` 不再紧跟标签名。
+  if (!html.includes('帮我装一个 token 消耗的插件')) {
+    throw new Error('逐轮预览顶部没有显示会话首句');
+  }
   const tag = /<div[^>]*class="tcs-turns"[^>]*>/.exec(html);
   const styleMatch = tag === null ? null : /style="([^"]*)"/.exec(tag[0]);
   if (styleMatch === null) throw new Error('逐轮预览没渲染出来');

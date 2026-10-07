@@ -132,6 +132,16 @@ const queryStub = {
   async readSession(sessionId) {
     reads += 1;
     if (sessionId === 'bad') throw new Error('SESSION_NOT_FOUND: bad');
+    if (sessionId === 'withprompt') {
+      return {
+        events: [
+          { type: 'user/message', time: 1, data: { content: '帮我装一个 token 消耗的插件', source: { clientTimeZone: 'Asia/Shanghai' } } },
+          { type: 'turn/start', time: 2, data: { turn: 1 } },
+          { type: 'user/message', time: 3, data: { content: '第二轮的话', source: { clientTimeZone: 'Asia/Shanghai' } } },
+          { type: 'turn/end', time: 4, data: { turn: 1 } },
+        ],
+      };
+    }
     return { events: EVENTS.map((event) => ({ ...event })) };
   },
 };
@@ -178,6 +188,9 @@ assertEqual('answers with the last N turns', [limited.status, limited.body.turns
 assertEqual('the folded usage rides along', [limited.body.turns[0].turn, limited.body.turns[0].usage.uncachedInputTokens], [2, 3]);
 assertEqual('reports that the official fold was used', limited.body.folded, true);
 assertEqual('a failed read becomes 404', (await call('/token-cost/turns?sessionId=bad')).status, 404);
+const withPrompt = await call('/token-cost/turns?sessionId=withprompt');
+assertEqual('payload carries the conversation first line', withPrompt.body.firstPrompt, '帮我装一个 token 消耗的插件');
+assertEqual('a turn takes the prompt that follows its turn/start', withPrompt.body.turns.map((turn) => turn.summary), ['第二轮的话']);
 const readsAfterFirst = reads;
 await call('/token-cost/turns?sessionId=a&limit=1');
 assert('the short cache avoids a second log read', reads === readsAfterFirst);

@@ -185,6 +185,8 @@ window.__ModuleLoader__.load({
       '.tcs-turnsTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}',
       '.tcs-turnsMeta{flex:none;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
+      '.tcs-turnsFirst{padding:4px 0 2px;color:var(--dsw-alias-label-primary);font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);',
+      'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}',
       '.tcs-turnsList{display:flex;flex-direction:column;gap:1px;padding-top:4px}',
       '.tcs-turn{display:flex;flex-direction:column;gap:2px;padding:4px 0;',
       '.tcs-turnHead{display:flex;align-items:baseline;gap:6px;min-width:0}',
@@ -1055,6 +1057,10 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'tcs-turnsTitle' }, previewRow === undefined ? tr('turnsTitle') : previewRow.title),
                   h('span', { className: 'tcs-turnsMeta' }, previewRow === undefined ? '' : tr('turnsTitle')),
                 ),
+                // 会话首句：放在最上面，先认出是哪个对话
+                typeof preview.firstPrompt === 'string' && preview.firstPrompt !== ''
+                  ? h('div', { className: 'tcs-turnsFirst', title: preview.firstPrompt }, preview.firstPrompt)
+                  : null,
                 preview.state === 'loading'
                   ? h('div', { className: 'tcs-turnsNote' }, tr('loading'))
                   : preview.state === 'error'
