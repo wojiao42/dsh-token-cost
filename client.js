@@ -893,7 +893,9 @@ window.__ModuleLoader__.load({
         previewAbort.current = controller;
         setPreview({ id: sessionId, state: 'loading' });
         fetch(
-          '/token-cost/turns?sessionId=' + encodeURIComponent(sessionId) + '&limit=30',
+          // 不带 limit：Host 端默认返回全部轮次（每轮只有摘要+用量，几十 KB 级）；
+          // 预览面板本身可滚动，截断反而会让很早的轮次点不到。
+          '/token-cost/turns?sessionId=' + encodeURIComponent(sessionId),
           controller === null ? undefined : { signal: controller.signal },
         )
           .then((response) => {

@@ -374,7 +374,7 @@ assertEqual('turnView marks an unpriced model with a dash',
   previewRows[0].node.props.onMouseEnter();
   assert('the per-turn fetch waits for the debounce', urls.length === 0);
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assertEqual('hovering a row fetches that session per-turn usage', urls, ['/token-cost/turns?sessionId=a&limit=30']);
+  assertEqual('hovering a row fetches that session per-turn usage (no truncation)', urls, ['/token-cost/turns?sessionId=a']);
   globalThis.__FORCE_OPEN__ = false;
 
   console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.00658');
