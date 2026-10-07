@@ -186,7 +186,10 @@ window.__ModuleLoader__.load({
       '.tcs-turnsMeta{flex:none;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-turnsList{display:flex;flex-direction:column;gap:1px;padding-top:4px}',
-      '.tcs-turn{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:baseline;gap:4px 8px;padding:3px 0;',
+      '.tcs-turn{display:flex;flex-direction:column;gap:2px;padding:4px 0;',
+      '.tcs-turnHead{display:flex;align-items:baseline;gap:6px;min-width:0}',
+      '.tcs-turnMeta{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}',
+      '.tcs-turnMeta>span{white-space:nowrap}',
       'width:100%;text-align:left;font:inherit;color:inherit;background:0 0;border:none;cursor:pointer;',
       'border-bottom:.5px solid color-mix(in srgb,var(--dsw-alias-border-l2) 45%,transparent)}',
       '.tcs-turn:hover,.tcs-turn:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
@@ -198,11 +201,11 @@ window.__ModuleLoader__.load({
       '.tcs-pill:focus-visible,.tcs-row:focus-visible,.tcs-turn:focus-visible,.tcs-more:focus-visible{',
       'outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#3964fe));outline-offset:1px}',
       '.tcs-turn:last-child{border-bottom:none}',
-      '.tcs-turnTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.tcs-turnTitle{min-width:0;white-space:normal;overflow-wrap:anywhere}',
       '.tcs-turnNo{white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
-      '.tcs-turnTokens{text-align:right;color:var(--dsw-alias-label-tertiary)}',
-      '.tcs-turnMoney{text-align:right;font-variant-numeric:tabular-nums}',
-      '.tcs-turnWhen{grid-column:2 / -1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+      '.tcs-turnTokens{color:var(--dsw-alias-label-tertiary)}',
+      '.tcs-turnMoney{font-variant-numeric:tabular-nums}',
+      '.tcs-turnWhen{white-space:nowrap;',
       'color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-turnsNote{padding-top:6px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
@@ -472,11 +475,11 @@ window.__ModuleLoader__.load({
     ];
     /** 轮次导航轨道的容器文案（中英都认）。 */
     const TURN_RAIL_LABELS = ['轮次导航', 'Turn navigation'];
+    /** 轨道刻度间距（与平台 TurnNavigator 的 TURN_SPACING_PX 一致），用于滚动落位。 */
+    const TURN_SPACING_PX = 10;
     /** 刻度轮询节奏与上限（切换会话/加载历史都要时间）。 */
     const JUMP_POLL_MS = 120;
     const JUMP_POLL_TRIES = 60;
-    /** 跨会话跳转前先等视图换完，否则会点到上一个会话留在 DOM 里的同号刻度。 */
-    const JUMP_SWITCH_MS = 700;
 
     /** 刻度按钮上的轮号，识别不出返回 null。 */
     function turnNumberOf(node) {
@@ -498,6 +501,28 @@ window.__ModuleLoader__.load({
         }
       }
       return null;
+    }
+
+    /** 轨道里第 ordinal 个刻度（data-index 是平台自己给的序号）。 */
+    function markByIndex(ordinal) {
+      const rail = turnRail();
+      if (rail === null) return null;
+      for (const node of rail.querySelectorAll('button[aria-label][data-index]')) {
+        if (Number(node.getAttribute('data-index')) === ordinal) return node;
+      }
+      return null;
+    }
+
+    /** 把轨道滚到第 ordinal 个刻度附近（刻度固定 10px 间距，平台自己的 scrollToIndex 也这么做）。 */
+    function scrollRailToIndex(ordinal) {
+      const rail = turnRail();
+      if (rail === null) return;
+      for (const node of rail.querySelectorAll('*')) {
+        if (node.scrollHeight > node.clientHeight + 4) {
+          node.scrollTop = Math.max(0, ordinal * TURN_SPACING_PX - node.clientHeight / 2);
+          return;
+        }
+      }
     }
 
     /** 第 turn 轮的候选刻度：可见轨道优先，loaded 文案优先。 */
@@ -532,18 +557,31 @@ window.__ModuleLoader__.load({
      * 已回退：这里只负责把手点到正确的刻度上。
      */
     function jumpToTurn(turn, options = {}) {
-      const attempt = (left) => {
-        const marks = findTurnMarks(turn);
-        if (marks.length > 0) {
-          if (typeof marks[0].click === 'function') marks[0].click();
-          return;
+      const ordinal = Number.isInteger(options.ordinal) ? options.ordinal : null;
+      /** 先按序号点（不受标签编号影响）；序号处标签轮号对不上再退回按标签点。 */
+      const clickOnce = () => {
+        if (ordinal !== null) {
+          const byIndex = markByIndex(ordinal);
+          const info = byIndex === null ? null : turnNumberOf(byIndex);
+          if (byIndex !== null && info !== null && info.turn === turn) {
+            if (typeof byIndex.click === 'function') byIndex.click();
+            return true;
+          }
+          scrollRailToIndex(ordinal);
         }
+        const marks = findTurnMarks(turn);
+        if (marks.length === 0) return false;
+        if (typeof marks[0].click === 'function') marks[0].click();
+        return true;
+      };
+      const attempt = (left) => {
+        if (clickOnce()) return;
         if (left <= 0) return;
         setTimeout(() => attempt(left - 1), JUMP_POLL_MS);
       };
-      const waited = options.delayMs ?? 0;
-      if (waited > 0) setTimeout(() => attempt(JUMP_POLL_TRIES), waited);
-      else attempt(JUMP_POLL_TRIES);
+      // 立即尝试一次：刻度还没渲染出来就按 JUMP_POLL_MS 轮询（不额外等固定时间——那会把
+      // "切会话后才出现的刻度"和"上一个会话残留的刻度"一起赌进去）。
+      attempt(JUMP_POLL_TRIES);
     }
 
     /**
@@ -565,20 +603,30 @@ window.__ModuleLoader__.load({
           role: clickable ? 'button' : undefined,
           tabIndex: clickable ? 0 : undefined,
           title: clickable ? tr('jumpTurn', { turn: turn.turn }) : view.label,
-          onClick: clickable ? () => onJump(turn.turn) : undefined,
+          onClick: clickable ? () => onJump(turn.turn, turn.ordinal) : undefined,
           onKeyDown: clickable
             ? (event) => {
                 if (event?.key !== 'Enter' && event?.key !== ' ') return;
                 if (typeof event.preventDefault === 'function') event.preventDefault();
-                onJump(turn.turn);
+                onJump(turn.turn, turn.ordinal);
               }
             : undefined,
         },
-        h('span', { className: 'tcs-turnNo' }, tr('turn') + ' ' + String(turn.turn)),
-        h('span', { className: 'tcs-turnTitle' }, view.label),
-        h('span', { className: 'tcs-turnTokens' }, view.tokens),
-        h('span', { className: 'tcs-turnMoney' }, view.amount),
-        h('span', { className: 'tcs-turnWhen' }, view.when),
+        // 第一行：轮号 + 触发这一轮的那句话（整行、可换行）——方便一眼定位
+        h(
+          'span',
+          { className: 'tcs-turnHead' },
+          h('span', { className: 'tcs-turnNo' }, tr('turn') + ' ' + String(turn.turn)),
+          h('span', { className: 'tcs-turnTitle' }, view.label),
+        ),
+        // 第二行：费用 / token / 时间与步数
+        h(
+          'span',
+          { className: 'tcs-turnMeta' },
+          h('span', { className: 'tcs-turnMoney' }, view.amount),
+          h('span', { className: 'tcs-turnTokens' }, view.tokens),
+          h('span', { className: 'tcs-turnWhen' }, view.when),
+        ),
       );
     }
 
@@ -977,17 +1025,14 @@ window.__ModuleLoader__.load({
        * 点某一轮：切到那个会话 → 收起面板 → 把主视图落到该轮。
        * 先切换再跳：轨道属于当前会话，不先切过去就找不到对应刻度。
        */
-      const onJumpTurn = (sessionId) => (turnNo) => {
+      const onJumpTurn = (sessionId) => (turnNo, ordinal) => {
         if (typeof openSession === 'function') openSession(sessionId);
         setPinned(false);
         setOpen(false);
         setPreview(null);
         setPreviewAnchor(null);
         cancelPreview();
-        jumpToTurn(turnNo, {
-          // 跨会话时旧会话的刻度还挂在 DOM 里，先等视图换完再点（否则会点到上一个会话的同号刻度）
-          delayMs: sessionId === currentSessionIdOf(sessions) ? 0 : JUMP_SWITCH_MS,
-        });
+        jumpToTurn(turnNo, { ordinal: Number.isInteger(ordinal) ? ordinal : null });
       };
 
       const turnsPanel =
@@ -1026,7 +1071,10 @@ window.__ModuleLoader__.load({
                         (preview.turns ?? []).length === 0
                           ? h('div', { className: 'tcs-turnsNote' }, tr('noTurns'))
                           : (preview.turns ?? [])
-                              .slice()
+                              .map((turn, index) => ({
+                                ...turn,
+                                ordinal: (preview.totalTurns ?? preview.turns.length) - preview.turns.length + index,
+                              }))
                               .reverse()
                               .map((turn) => turnRow(turn, tr, previewPrice, onJumpTurn(preview.id))),
                       ),
