@@ -28,6 +28,7 @@ const PRESENT = {
   '逐轮预览：取数路由': '/token-cost/turns',
   '逐轮预览：浮层': 'tcs-turns',
   '逐轮浮层白名单（点轮次才会触发跳转）': 'TURNS_PANEL_ID',
+  '跳转验证（点完能看出落到第几轮）': 'jumpWrong',
   '面板标记当前任务行': "'data-current'",
   '冷会话取证 warmProjections': 'warmProjections',
   '会话列表源 useSyncExternalStore': 'useSyncExternalStore',
