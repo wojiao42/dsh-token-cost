@@ -190,6 +190,13 @@ window.__ModuleLoader__.load({
       'width:100%;text-align:left;font:inherit;color:inherit;background:0 0;border:none;cursor:pointer;',
       'border-bottom:.5px solid color-mix(in srgb,var(--dsw-alias-border-l2) 45%,transparent)}',
       '.tcs-turn:hover,.tcs-turn:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
+      // 焦点环自带一套：主题里管焦点环的规则（`:focus-visible{outline:none}`、pointer 模态下
+      // `outline-color:#0000`）都是**文档级**的，照不到隔离的侧栏插槽子树——徽标就在那棵树里，
+      // 于是点过徽标后浏览器默认的黑色焦点环会留在上面，看着就像凭空多了一圈黑框。
+      // 鼠标点击不显示环；键盘聚焦给一个显式的蓝色环（保住可达性）。
+      '.tcs-pill:focus,.tcs-row:focus,.tcs-turn:focus,.tcs-more:focus{outline:none}',
+      '.tcs-pill:focus-visible,.tcs-row:focus-visible,.tcs-turn:focus-visible,.tcs-more:focus-visible{',
+      'outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#3964fe));outline-offset:1px}',
       '.tcs-turn:last-child{border-bottom:none}',
       '.tcs-turnTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.tcs-turnNo{white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
