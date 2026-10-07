@@ -262,10 +262,14 @@ function mount(react) {
   });
   return captured.component;
 }
+/** 出图脚本顺带做的行为自检：记录 openSession 收到的会话 id。 */
+const openedSessionIds = [];
 const PROPS = {
   t: (key) => ZH[key] ?? key,
   sessionsSource: { getSnapshot: () => SESSIONS, subscribe: () => () => {} },
-  openSession() {},
+  openSession: (sessionId) => {
+    openedSessionIds.push(sessionId);
+  },
   warmProjections() {},
   wide: true,
 };
@@ -315,14 +319,42 @@ async function turnsPage(dark) {
   row?.props?.onMouseEnter?.({ currentTarget: { getBoundingClientRect: () => ROW_RECT } });
   await new Promise((resolve) => setTimeout(resolve, 250));
   react.__beginRender();
-  const html = page(component(PROPS), { dark });
+  const tree = component(PROPS);
+  const html = page(tree, { dark });
 
-  // 自检：锚定错了就报错，别悄悄出一张错的图。
+  // 自检 1：锚定错了就报错，别悄悄出一张错的图。
   const turnsTag = /<div class="tcs-turns"[^>]*style="([^"]*)"/.exec(html);
   if (turnsTag === null) throw new Error('逐轮预览没渲染出来');
   const style = turnsTag[1];
   if (!style.includes(`top:${ROW_RECT.top}px`) || style.includes('bottom:')) {
     throw new Error('逐轮预览没有锚定到被悬停的那一行，实际 style=' + style);
+  }
+
+  // 自检 2：点某一行轮次 → 切到该会话，并点中聊天视图轮次轨道上对应的刻度。
+  // 平台没有公开的跳转命令，跳转就是靠点这颗刻度按钮实现的，所以要断言它真被点到。
+  const clicked = [];
+  const railTurns = [9, 10, 11, 12];
+  globalThis.document.querySelectorAll = (selector) =>
+    selector === 'button[aria-label]'
+      ? railTurns.map((turn) => ({
+          getAttribute: () => `跳转到第 ${turn} 轮`,
+          click: () => {
+            clicked.push(`turn-${turn}`);
+          },
+        }))
+      : [];
+  const turnRowNode = walk(tree).find((node) => node.props?.className === 'tcs-turn');
+  if (turnRowNode === undefined) throw new Error('逐轮预览里没有可点的轮次行');
+  if (typeof turnRowNode.props.onClick !== 'function') throw new Error('轮次行不可点');
+  // 从轮次行的「第 N 轮」标签里取 N，断言点到的是同一轮。
+  const noNode = walk(turnRowNode).find((node) => node.props?.className === 'tcs-turnNo');
+  const clickedTurn = Number(String((noNode?.children ?? []).join('')).replace(/[^\d]/g, ''));
+  turnRowNode.props.onClick();
+  if (openedSessionIds.at(-1) !== 's2') {
+    throw new Error('点轮次没有切到该会话，实际 openSession=' + JSON.stringify(openedSessionIds));
+  }
+  if (!clicked.includes(`turn-${clickedTurn}`)) {
+    throw new Error(`点轮次没有点中聊天视图的刻度按钮，期望 turn-${clickedTurn}，实际=` + JSON.stringify(clicked));
   }
   return html;
 }

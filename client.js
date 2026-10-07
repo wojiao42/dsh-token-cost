@@ -77,6 +77,7 @@ window.__ModuleLoader__.load({
       ago: '最近',
       turnsTitle: '逐轮用量',
       turn: '第',
+      jumpTurn: '跳到第 {turn} 轮',
       turnsUnit: '轮',
       openTurn: '进行中',
       loading: '读取中…',
@@ -112,6 +113,7 @@ window.__ModuleLoader__.load({
       ago: 'last',
       turnsTitle: 'Per-turn usage',
       turn: 'turn',
+      jumpTurn: 'Jump to turn {turn}',
       turnsUnit: 'turns',
       openTurn: 'open',
       loading: 'loading…',
@@ -185,7 +187,9 @@ window.__ModuleLoader__.load({
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-turnsList{display:flex;flex-direction:column;gap:1px;padding-top:4px}',
       '.tcs-turn{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:baseline;gap:4px 8px;padding:3px 0;',
+      'width:100%;text-align:left;font:inherit;color:inherit;background:0 0;border:none;cursor:pointer;',
       'border-bottom:.5px solid color-mix(in srgb,var(--dsw-alias-border-l2) 45%,transparent)}',
+      '.tcs-turn:hover,.tcs-turn:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}',
       '.tcs-turn:last-child{border-bottom:none}',
       '.tcs-turnTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.tcs-turnNo{white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
@@ -447,14 +451,72 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 一行逐轮用量：轮号 / token / 费用 / 用时与时刻。 */
-    function turnRow(turn, tr, price) {
+    /**
+     * 聊天视图轮次轨道刻度的 aria-label（中英都认）。
+     * 未加载的历史刻度文案不同（会先分页再落位），两条都要匹配。
+     */
+    const TURN_MARK_LABELS = [
+      /^跳转到第\s*(\d+)\s*轮$/,
+      /^加载并跳转到第\s*(\d+)\s*轮$/,
+      /^Jump to turn\s+(\d+)$/i,
+      /^Load and jump to turn\s+(\d+)$/i,
+    ];
+    /** 切换会话后轨道要等一帧才渲染，跳转按这个节奏轮询等待（约 5 秒上限）。 */
+    const JUMP_POLL_MS = 120;
+    const JUMP_POLL_TRIES = 42;
+
+    /** 在聊天视图的轮次轨道里找第 turn 轮的刻度按钮；找不到返回 null。 */
+    function findTurnMark(turn) {
+      if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null;
+      for (const node of document.querySelectorAll('button[aria-label]')) {
+        const label = String(node.getAttribute?.('aria-label') ?? '').trim();
+        for (const pattern of TURN_MARK_LABELS) {
+          const match = pattern.exec(label);
+          if (match !== null && Number(match[1]) === turn) return node;
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 把主视图落到某一轮。
+     *
+     * 平台没有公开的「跳转到第 N 轮」命令：`uiWorkspace.openSession(id)` 只切会话，
+     * 真正的分页＋落位逻辑留在聊天视图的轮次轨道组件内部（`pendingJumpRef`）。
+     * 所以这里复用轨道自己那一颗刻度按钮——点它等于用户手点轨道，未加载的历史
+     * 会由轨道自己 loadThrough 之后再落位。刻度还没渲染出来就轮询等一会儿；
+     * 一直找不到（比如会话只有一轮、或平台改了文案）就安静放弃，不报错。
+     */
+    function jumpToTurn(turn) {
+      const attempt = (left) => {
+        const mark = findTurnMark(turn);
+        if (mark !== null) {
+          if (typeof mark.click === 'function') mark.click();
+          return;
+        }
+        if (left <= 0) return;
+        setTimeout(() => attempt(left - 1), JUMP_POLL_MS);
+      };
+      attempt(JUMP_POLL_TRIES);
+    }
+
+    /**
+     * 一行逐轮用量：轮号 / token / 费用 / 用时与时刻。
+     * 整行可点：切到该会话并把主视图落到这一轮（见 {@link jumpToTurn}）。
+     */
+    function turnRow(turn, tr, price, onJump) {
       const view = turnView(turn, price, tr('openTurn'), tr('approx'), tr('untitledTurn'));
       return h(
-        'div',
-        { className: 'tcs-turn', key: String(turn.turn) },
+        'button',
+        {
+          type: 'button',
+          className: 'tcs-turn',
+          key: String(turn.turn),
+          title: onJump === undefined ? view.label : tr('jumpTurn', { turn: turn.turn }),
+          onClick: onJump === undefined ? undefined : () => onJump(turn.turn),
+        },
         h('span', { className: 'tcs-turnNo' }, tr('turn') + ' ' + String(turn.turn)),
-        h('span', { className: 'tcs-turnTitle', title: view.label }, view.label),
+        h('span', { className: 'tcs-turnTitle' }, view.label),
         h('span', { className: 'tcs-turnTokens' }, view.tokens),
         h('span', { className: 'tcs-turnMoney' }, view.amount),
         h('span', { className: 'tcs-turnWhen' }, view.when),
@@ -851,6 +913,20 @@ window.__ModuleLoader__.load({
         return { bottom: Math.max(8, viewport - anchor.bottom), maxHeight: Math.max(160, Math.min(limit, above)) };
       })();
 
+      /**
+       * 点某一轮：切到那个会话 → 收起面板 → 把主视图落到该轮。
+       * 先切换再跳：轨道属于当前会话，不先切过去就找不到对应刻度。
+       */
+      const onJumpTurn = (sessionId) => (turnNo) => {
+        if (typeof openSession === 'function') openSession(sessionId);
+        setPinned(false);
+        setOpen(false);
+        setPreview(null);
+        setPreviewAnchor(null);
+        cancelPreview();
+        jumpToTurn(turnNo);
+      };
+
       const turnsPanel =
         preview === null || open !== true
           ? null
@@ -888,7 +964,7 @@ window.__ModuleLoader__.load({
                           : (preview.turns ?? [])
                               .slice()
                               .reverse()
-                              .map((turn) => turnRow(turn, tr, previewPrice)),
+                              .map((turn) => turnRow(turn, tr, previewPrice, onJumpTurn(preview.id))),
                       ),
                 preview.state === 'ready' && preview.truncated === true
                   ? h(
