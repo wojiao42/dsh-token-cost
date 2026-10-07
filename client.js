@@ -85,6 +85,7 @@ window.__ModuleLoader__.load({
       truncatedTurns: '仅显示最近',
       foldUnavailable: '无法折叠逐轮用量（缺少官方折叠函数）',
       needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
+      approx: '近似',
       now: '刚刚',
       turns: '轮',
       steps: '步',
@@ -118,6 +119,7 @@ window.__ModuleLoader__.load({
       truncatedTurns: 'last',
       foldUnavailable: 'per-turn fold unavailable',
       needRestart: 'per-turn data needs one Harness restart (host half changed)',
+      approx: 'approx',
       now: 'just now',
       turns: ' turns',
       steps: ' steps',
@@ -405,7 +407,7 @@ window.__ModuleLoader__.load({
     const TURNS_WIDTH = 328;
 
     /** 一轮用量的展示数据（纯函数，便于离线断言）。 */
-    function turnView(turn, price, openLabel) {
+    function turnView(turn, price, openLabel, approxLabel) {
       const usage = turn.usage;
       const cost = usage === null || usage === undefined ? null : costOf(usage, price);
       const billed =
@@ -423,13 +425,15 @@ window.__ModuleLoader__.load({
       return {
         tokens: billed === null ? '—' : fmtCompact(billed),
         amount: cost === null ? '—' : cost.total > 0 ? '≈' + fmtMoney(cost.total) : '¥0',
-        when: [duration, when, turn.closed === false ? openLabel : null].filter((part) => part !== null).join(' · '),
+        when: [duration, when, turn.closed === false ? openLabel : null, turn.exact === false ? approxLabel : null]
+          .filter((part) => part !== null)
+          .join(' · '),
       };
     }
 
     /** 一行逐轮用量：轮号 / token / 费用 / 用时与时刻。 */
     function turnRow(turn, tr, price) {
-      const view = turnView(turn, price, tr('openTurn'));
+      const view = turnView(turn, price, tr('openTurn'), tr('approx'));
       return h(
         'div',
         { className: 'tcs-turn', key: String(turn.turn) },

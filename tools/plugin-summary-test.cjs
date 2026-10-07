@@ -335,6 +335,9 @@ assertEqual('turnView prices one turn with the session model',
 assertEqual('turnView degrades to dashes when the turn usage cannot be proven',
   turnView({ turn: 4, startTime: 1000, endTime: null, steps: 1, closed: false, usage: null }, flash, '进行中'),
   { tokens: '—', amount: '—', when: clock(1000) + ' · 进行中' });
+assertEqual('turnView flags approximate turns',
+  turnView({ turn: 6, startTime: 1000, endTime: 2000, steps: 1, closed: true, exact: false, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, flash, '进行中', '近似').when,
+  '1s · ' + clock(1000) + ' · 近似');
 assertEqual('turnView marks an unpriced model with a dash',
   turnView({ turn: 5, startTime: 1000, endTime: 2000, steps: 1, closed: true, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, null, '进行中').amount,
   '—');

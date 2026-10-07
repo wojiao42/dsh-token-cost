@@ -2,9 +2,9 @@
  * Host half of the token-cost bundle.
  *
  * 侧栏徽标与面板用的投影数据全在客户端，Host 半侧只多做一件事：**逐轮用量**。
- * 轮次数据不在任何投影里（`tokenUsage` 只有整会话总量），所以这里读该会话的日志事件，
- * 用官方 `@deepseek-ai/dsh-token-meter` 的 `deriveTurnTokenUsage` 逐轮折叠——和聊天里
- * 「本轮用量」完全同源，只是换成了按需读取 + HTTP 返回。
+ * 轮次数据不在任何投影里（`tokenUsage` 只有整会话总量），所以这里读该会话的日志事件逐轮折叠。
+ * 折叠是自己实现的：按轮累加 provider 在 `assistant/message` 上报的 `usage`；
+ * 出现 `llm/retry*` 或该轮未闭合时把该轮标成近似（`exact: false`），不猜不补。
  *
  *   GET /token-cost/turns?sessionId=<id>[&limit=30][&refresh=1]
  *     → { sessionId, totalTurns, truncated, turns: [{ turn, startTime, endTime, steps, closed, usage }] }
@@ -59,27 +59,48 @@ export function turnsFromEvents(events) {
 /**
  * 逐轮折叠用量与时间。
  * @param {object[]} events 会话日志事件。
- * @param {(events: object[]) => object|undefined} [fold] 折叠函数；默认由调用方注入官方实现。
+ * @param {(events: object[]) => object|undefined} [fold] 折叠函数；默认 `foldTurnUsage`（可注入桩做离线测试）。
  * @returns {Array<{turn: number, startTime: number|null, endTime: number|null, steps: number, closed: boolean, usage: object|null}>}
  */
 export function foldTurns(events, fold) {
-  return turnsFromEvents(events).map((turn) => ({
-    turn: turn.turn,
-    startTime: turn.startTime,
-    endTime: turn.endTime,
-    steps: turn.steps,
-    closed: turn.closed,
-    usage: typeof fold === 'function' ? fold(turn.events) ?? null : null,
-  }));
+  const foldUsage = typeof fold === 'function' ? fold : foldTurnUsage;
+  return turnsFromEvents(events).map((turn) => {
+    const usage = foldUsage(turn.events) ?? null;
+    return {
+      turn: turn.turn,
+      startTime: turn.startTime,
+      endTime: turn.endTime,
+      steps: turn.steps,
+      closed: turn.closed,
+      usage,
+      // 未闭合（还在跑）或折叠器自己标了近似，都算近似
+      exact: usage !== null && usage.exact !== false && turn.closed,
+    };
+  });
 }
 
-/** 官方折叠函数：只在第一次请求时动态导入，所以本模块在没有该包的进程里也能加载（例如离线测试）。 */
-let foldPromise;
-function loadFold() {
-  foldPromise ??= import('@deepseek-ai/dsh-token-meter/client')
-    .then((module) => module.deriveTurnTokenUsage)
-    .catch(() => undefined);
-  return foldPromise;
+/**
+ * 一轮的用量：把该轮 `assistant/message` 上报的 provider 用量相加。
+ * 字段名与官方一致（`inputTokens` = 未缓存输入），所以客户端的单价表可以直接套用。
+ * @param {object[]} events 该轮的事件片（turn/start … turn/end）。
+ * @returns {{uncachedInputTokens: number, cacheReadTokens: number, cacheWriteTokens: number, outputTokens: number, samples: number, exact: boolean}|null}
+ */
+export function foldTurnUsage(events) {
+  const total = { uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, samples: 0, exact: true };
+  for (const event of events) {
+    if (event?.type === 'llm/retry' || event?.type === 'llm/retry-started') total.exact = false;
+    if (event?.type !== 'assistant/message') continue;
+    const usage = event.data?.usage;
+    if (usage === null || typeof usage !== 'object') continue;
+    if (typeof usage.inputTokens !== 'number' && typeof usage.outputTokens !== 'number') continue;
+    total.uncachedInputTokens += typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+    total.cacheReadTokens += typeof usage.cacheReadTokens === 'number' ? usage.cacheReadTokens : 0;
+    total.cacheWriteTokens += typeof usage.cacheWriteTokens === 'number' ? usage.cacheWriteTokens : 0;
+    total.outputTokens += typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+    total.samples += 1;
+  }
+  if (total.samples === 0) return null;
+  return total;
 }
 
 function sendJson(response, status, body) {
@@ -105,14 +126,14 @@ export function apply(ctx, config = {}) {
     if (typeof query.readSession !== 'function') throw new Error('sessionQuery.readSession unavailable');
     // readSession: 读并校验整份会话日志（活跃会话走 live，冷会话走持久化），返回克隆过的事件
     const { events } = await query.readSession(sessionId);
-    const fold = typeof config.fold === 'function' ? config.fold : await loadFold();
-    const turns = foldTurns(events ?? [], fold);
+    const turns = foldTurns(events ?? [], config.fold);
     const selected = turns.slice(Math.max(0, turns.length - limit));
     const payload = {
       sessionId,
       totalTurns: turns.length,
       truncated: selected.length < turns.length,
-      folded: typeof fold === 'function',
+      // 兼容字段：折叠器是本插件自带的，始终可用
+      folded: true,
       turns: selected,
     };
     cache.set(sessionId, { at: Date.now(), payload });

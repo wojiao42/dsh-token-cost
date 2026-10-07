@@ -65,8 +65,25 @@ assertEqual('foldTurns wires the fold to each slice', stubbed.map((turn) => turn
 assertEqual('foldTurns keeps timing metadata',
   stubbed.map((turn) => [turn.turn, turn.startTime, turn.endTime, turn.steps, turn.closed]),
   [[1, 1000, 1200, 2, true], [2, 2000, null, 1, false]]);
-assertEqual('without a fold every turn degrades to null usage', foldTurns(EVENTS).map((turn) => turn.usage), [null, null]);
+assertEqual('without an injected fold the built-in fold adds up provider usage',
+  foldTurns(EVENTS).map((turn) => [turn.usage.uncachedInputTokens, turn.usage.outputTokens, turn.usage.samples]),
+  [[10, 5, 1], [3, 1, 1]]);
+assertEqual('a still-open turn is not exact', foldTurns(EVENTS).map((turn) => turn.exact), [true, false]);
 assertEqual('a fold returning undefined becomes null usage', foldTurns(EVENTS, () => undefined).map((turn) => turn.usage), [null, null]);
+assertEqual('a retried turn is flagged approximate',
+  foldTurns([
+    { type: 'turn/start', time: 1, data: { turn: 1 } },
+    { type: 'llm/retry', time: 2, data: { turn: 1, step: 1 } },
+    { type: 'assistant/message', time: 3, data: { turn: 1, step: 1, usage: { inputTokens: 5, outputTokens: 2 } } },
+    { type: 'turn/end', time: 4, data: { turn: 1 } },
+  ]).map((turn) => [turn.usage.uncachedInputTokens, turn.exact]),
+  [[5, false]]);
+assertEqual('a turn without reported usage stays null',
+  foldTurns([
+    { type: 'turn/start', time: 1, data: { turn: 1 } },
+    { type: 'turn/end', time: 2, data: { turn: 1 } },
+  ]).map((turn) => turn.usage),
+  [null]);
 
 // ── 路由契约：假 ctx + 假 sessionQuery，验证 HTTP 层与返回结构 ──────────────
 let route;
@@ -121,7 +138,6 @@ assertEqual('answers with the last N turns', [limited.status, limited.body.turns
 assertEqual('the folded usage rides along', [limited.body.turns[0].turn, limited.body.turns[0].usage.uncachedInputTokens], [2, 3]);
 assertEqual('reports that the official fold was used', limited.body.folded, true);
 assertEqual('a failed read becomes 404', (await call('/token-cost/turns?sessionId=bad')).status, 404);
-assert('a service without readSession is reported', true);
 const readsAfterFirst = reads;
 await call('/token-cost/turns?sessionId=a&limit=1');
 assert('the short cache avoids a second log read', reads === readsAfterFirst);
