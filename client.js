@@ -558,12 +558,22 @@ window.__ModuleLoader__.load({
      * 之前加过"等落点稳定 + 按偏差校正"，但那会在平滑滚动期间多点、把落点带偏，
      * 已回退：这里只负责把手点到正确的刻度上。
      */
+    /**
+     * 已经"热过"轨道的会话：冷轨道（刚切过去、还没做过任何导航）里刻度不全，
+     * 直接按序号点会点空或点到别处。用户实测：先手点一次第一轮，之后点哪一轮都准——
+     * 这里把那一步自动化。
+     */
+    const warmedJumpSessions = new Set();
+    /** 预热后等轨道落位的时间。 */
+    const JUMP_WARM_MS = 500;
+
     function jumpToTurn(turn, options = {}) {
       const ordinal = Number.isInteger(options.ordinal) ? options.ordinal : null;
-      /** 先按序号点（不受标签编号影响）；序号处标签轮号对不上再退回按标签点。 */
-      const clickOnce = () => {
+      const sessionId = typeof options.sessionId === 'string' ? options.sessionId : null;
+
+      /** 点一次目标刻度：优先按序号（两边都按轮次升序，序号一致即同一轮）。 */
+      const clickTarget = () => {
         if (ordinal !== null) {
-          // 序号是权威：两边都按轮次升序，序号一致即同一轮（标签编号可能 0 基/1 基不同）
           const byIndex = markByIndex(ordinal);
           if (byIndex !== null) {
             if (typeof byIndex.click === 'function') byIndex.click();
@@ -576,14 +586,48 @@ window.__ModuleLoader__.load({
         if (typeof marks[0].click === 'function') marks[0].click();
         return true;
       };
-      const attempt = (left) => {
-        if (clickOnce()) return;
+
+      /** 轮询等目标刻度出现后点它。 */
+      const jumpTarget = (left) => {
+        if (clickTarget()) return;
         if (left <= 0) return;
-        setTimeout(() => attempt(left - 1), JUMP_POLL_MS);
+        setTimeout(() => jumpTarget(left - 1), JUMP_POLL_MS);
       };
-      // 立即尝试一次：刻度还没渲染出来就按 JUMP_POLL_MS 轮询（不额外等固定时间——那会把
-      // "切会话后才出现的刻度"和"上一个会话残留的刻度"一起赌进去）。
-      attempt(JUMP_POLL_TRIES);
+
+      const settleAndJump = () => {
+        if (sessionId !== null) warmedJumpSessions.add(sessionId);
+        jumpTarget(JUMP_POLL_TRIES);
+      };
+
+      // 已经热过：直接点目标
+      if (sessionId === null || warmedJumpSessions.has(sessionId)) {
+        jumpTarget(JUMP_POLL_TRIES);
+        return;
+      }
+
+      // 冷轨道：先点最前面那颗刻度（第 1 轮；渲染不出就点当前渲染出来的第一颗），再点目标
+      const warmUp = () => {
+        const rail = turnRail();
+        // 看不到轨道容器（页面结构不同/离线 harness）：别预热，直接点目标
+        if (rail === null) return 'no-rail';
+        const first = markByIndex(0) ?? rail.querySelector('button[aria-label]');
+        if (first === null) return false;
+        if (typeof first.click === 'function') first.click();
+        return true;
+      };
+      const warmAttempt = (left) => {
+        const warmed = warmUp();
+        if (warmed === true) {
+          setTimeout(settleAndJump, JUMP_WARM_MS);
+          return;
+        }
+        if (warmed === 'no-rail' || left <= 0) {
+          settleAndJump();
+          return;
+        }
+        setTimeout(() => warmAttempt(left - 1), JUMP_POLL_MS);
+      };
+      warmAttempt(JUMP_POLL_TRIES);
     }
 
     /**
@@ -1034,7 +1078,11 @@ window.__ModuleLoader__.load({
         setPreview(null);
         setPreviewAnchor(null);
         cancelPreview();
-        jumpToTurn(turnNo, { ordinal: Number.isInteger(ordinal) ? ordinal : null });
+        jumpToTurn(turnNo, {
+          ordinal: Number.isInteger(ordinal) ? ordinal : null,
+          sessionId,
+          // 冷轨道先预热一次（复现"先点第一轮"），同一会话之后直接点目标
+        });
       };
 
       const turnsPanel =
