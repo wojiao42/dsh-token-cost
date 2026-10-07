@@ -27,11 +27,15 @@ require(path.resolve(__dirname, '..', 'client.js'));
 
 const hooks = [];
 let setters = [];
+/** `__FORCE_OPEN__` 只顶第一个 useState（= open），其余状态保持各自初值。 */
+let forcedOpen = false;
 const React = {
   createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
   useState: (initial) => {
     hooks.push('useState');
-    const value = globalThis.__FORCE_OPEN__ === true ? true : initial;
+    const force = globalThis.__FORCE_OPEN__ === true && !forcedOpen;
+    if (force) forcedOpen = true;
+    const value = force ? true : initial;
     const setter = (next) => setters.push(next);
     setters.push(setter);
     return [value, setter];
@@ -95,6 +99,12 @@ const assert = (label, condition) => {
 };
 
 const registration = registrations.find((entry) => entry.options.name === 'sidebar.footer.action');
+const component = registration.component;
+/** 每次渲染前清掉「强制展开」标记，让只有第一个 useState 被顶成 true。 */
+const render = (props) => {
+  forcedOpen = false;
+  return component(props);
+};
 assert('registers into sidebar.footer.action', registration !== undefined);
 const composerRegistration = registrations.find((entry) => entry.options.name === 'conversation.composer.dock' && entry.options.id === 'token-cost-summary');
 assert('global summary is NOT duplicated into the composer dock', composerRegistration === undefined);
@@ -191,7 +201,7 @@ hooks.length = 0;
 setters = [];
 portals.length = 0;
 globalThis.__FORCE_OPEN__ = false;
-const badge = registration.component({ useSessions, t, openSession: (id) => opened.push(id), warmProjections, wide: true });
+const badge = render({ useSessions, t, openSession: (id) => opened.push(id), warmProjections, wide: true });
 const badgeNodes = collect(badge);
 const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').map((entry) => entry.text);
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
@@ -203,7 +213,7 @@ assert('badge uses summary icon', badgeNodes.some((entry) => entry.node.type ===
 assert('no portal while collapsed', portals.length === 0);
 
 // --- narrow (collapsed sidebar)
-const narrow = registration.component({ useSessions, t, openSession: () => {}, wide: false });
+const narrow = render({ useSessions, t, openSession: () => {}, wide: false });
 assert('narrow badge shows money only', collect(narrow).find((entry) => entry.className === 'tcs-label').text === '≈¥0.00658');
 
 // --- expanded panel
@@ -211,7 +221,7 @@ hooks.length = 0;
 setters = [];
 portals.length = 0;
 globalThis.__FORCE_OPEN__ = true;
-const expanded = registration.component({ useSessions, t, openSession: (id) => opened.push(id), wide: true });
+const expanded = render({ useSessions, t, openSession: (id) => opened.push(id), wide: true });
 const nodes = collect(expanded);
 const byClass = (className) => nodes.filter((entry) => entry.className === className);
 assert('panel is portalled to document.body', portals.length === 1 && portals[0].container === global.document.body);
@@ -245,7 +255,7 @@ assert('row click switches session', (() => {
 })());
 
 // --- empty list
-const empty = registration.component({ useSessions: () => ({ ids: [], byId: {} }), t, wide: true });
+const empty = render({ useSessions: () => ({ ids: [], byId: {} }), t, wide: true });
 assert('no sessions renders nothing', empty === null || empty === undefined);
 
 // --- cold sessions: background tasks whose projections are not in the control
@@ -262,16 +272,16 @@ const COLD = {
 const useCold = (selector) => (typeof selector === 'function' ? selector(COLD) : COLD);
 
 globalThis.__FORCE_OPEN__ = false;
-const coldBadge = registration.component({ useSessions: useCold, t, wide: true, warmProjections });
+const coldBadge = render({ useSessions: useCold, t, wide: true, warmProjections });
 assertEqual('warms cold sessions, running first', warmed, ['e', 'f']);
 assert('badge still renders while cold sessions load', collect(coldBadge).some((entry) => entry.className === 'tcs-lines'));
 
 warmed.length = 0;
-registration.component({ useSessions: useCold, t, wide: true, warmProjections });
+render({ useSessions: useCold, t, wide: true, warmProjections });
 assertEqual('does not re-request an already warmed session', warmed, []);
 
 globalThis.__FORCE_OPEN__ = true;
-const coldPanel = registration.component({ useSessions: useCold, t, wide: true, warmProjections });
+const coldPanel = render({ useSessions: useCold, t, wide: true, warmProjections });
 const coldNodes = collect(coldPanel);
 const coldRows = coldNodes.filter((entry) => entry.className === 'tcs-row');
 const more = coldNodes.find((entry) => entry.className === 'tcs-more');
@@ -283,18 +293,18 @@ assertEqual('pending loader warms every remaining session', warmed, ['e', 'f']);
 
 // --- missing hook never crashes
 globalThis.__FORCE_OPEN__ = false;
-const noHook = registration.component({ t, wide: true });
+const noHook = render({ t, wide: true });
 assert('missing useSessions degrades to nothing', noHook === null || noHook === undefined);
 
 // --- injected session-list observable (root-scope path, no root hooks needed)
 const fakeSource = { getSnapshot: () => SESSIONS, subscribe: () => () => {} };
-const viaSource = registration.component({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
+const viaSource = render({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
 const viaSourceValues = collect(viaSource).filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
 assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']);
 
 // --- 悬停展开（点击 = 钉住）
 globalThis.__FORCE_OPEN__ = false;
-const hoverBadge = registration.component({ useSessions, t, wide: true, warmProjections });
+const hoverBadge = render({ useSessions, t, wide: true, warmProjections });
 const hoverPill = collect(hoverBadge).find((entry) => entry.className === 'tcs-pill');
 assert('badge exposes hover handlers',
   typeof hoverPill?.node.props.onMouseEnter === 'function' && typeof hoverPill?.node.props.onMouseLeave === 'function');
@@ -303,4 +313,54 @@ hoverPill.node.props.onMouseEnter();
 assert('hovering the badge opens the panel', setters.includes(true));
 assert('badge reports pin state', hoverPill.node.props['data-pinned'] === 'false');
 
-console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.00658');
+// --- 逐轮预览：纯函数 + 悬停取数
+const { turnView } = plugin.__internals;
+const flash = { cacheHit: 0.02, cacheMiss: 0.4, output: 4 };
+const clock = (ms) => {
+  const date = new Date(ms);
+  return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+};
+assertEqual('turnView prices one turn with the session model',
+  turnView(
+    { turn: 3, startTime: 1000, endTime: 130000, steps: 1, closed: true, usage: { uncachedInputTokens: 1000, cacheReadTokens: 9000, cacheWriteTokens: 0, outputTokens: 500 } },
+    flash,
+    '进行中',
+  ),
+  { tokens: '10.5k', amount: '≈¥0.00258', when: '2m · ' + clock(1000) });
+assertEqual('turnView degrades to dashes when the turn usage cannot be proven',
+  turnView({ turn: 4, startTime: 1000, endTime: null, steps: 1, closed: false, usage: null }, flash, '进行中'),
+  { tokens: '—', amount: '—', when: clock(1000) + ' · 进行中' });
+assertEqual('turnView marks an unpriced model with a dash',
+  turnView({ turn: 5, startTime: 1000, endTime: 2000, steps: 1, closed: true, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, null, '进行中').amount,
+  '—');
+
+(async () => {
+  const urls = [];
+  globalThis.fetch = (url) => {
+    urls.push(String(url));
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        sessionId: 'a',
+        totalTurns: 4,
+        truncated: true,
+        folded: true,
+        turns: [
+          { turn: 4, startTime: 5000, endTime: 9000, steps: 1, closed: true, usage: { uncachedInputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 100 } },
+          { turn: 3, startTime: 3000, endTime: 4000, steps: 1, closed: true, usage: null },
+        ],
+      }),
+    });
+  };
+  globalThis.__FORCE_OPEN__ = true;
+  const openPanel = render({ useSessions, t, wide: true, warmProjections });
+  const previewRows = collect(openPanel).filter((entry) => entry.className === 'tcs-row');
+  assert('panel rows expose a hover hook for the per-turn preview', typeof previewRows[0]?.node.props.onMouseEnter === 'function');
+  previewRows[0].node.props.onMouseEnter();
+  assert('the per-turn fetch waits for the debounce', urls.length === 0);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assertEqual('hovering a row fetches that session per-turn usage', urls, ['/token-cost/turns?sessionId=a&limit=30']);
+  globalThis.__FORCE_OPEN__ = false;
+
+  console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.00658');
+})();

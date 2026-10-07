@@ -2,7 +2,8 @@
 
 > **English** — Live token usage and estimated cost in the DSH sidebar: every session combined, the
 > current task, and the as-of clock for those numbers; **hover** to expand a per-session breakdown with
-> time detail (elapsed, turns/steps, first-token, model vs tool time, decode speed).
+> time detail (elapsed, turns/steps, first-token, model vs tool time, decode speed), and **hover a
+> single row** to see that conversation's per-turn usage and cost.
 > Cost is estimated from an editable price table; the plugin adds no model calls, prompts or tools.
 
 侧栏底部常驻的**用量与费用账本**：全部会话合计、当前任务、以及这份账目的截至时刻。
@@ -20,11 +21,19 @@
 
 侧栏收起时降级为只显示合计金额。输入框下方**刻意不显示任何东西**——同一份合计不重复出现。
 
+**悬停某一个对话行**，右侧再弹一层该会话的**逐轮用量**：轮号、token、该轮费用、用时与开始时刻；
+某轮用量无法证明时显示 `—`。数据来自该会话的日志（Host 半侧读），折叠用的是官方
+`dsh-token-meter` 的逐轮算法——和聊天里「本轮用量」同源。
+
 ## 截图
 
 | 侧栏底部（三行徽标） | 明细面板（悬停展开） |
 |---|---|
 | ![徽标](assets/screenshot-1-badge.png) | ![面板](assets/screenshot-2-panel.png) |
+
+**悬停某个对话行 → 逐轮用量**：
+
+![逐轮](assets/screenshot-4-turns.png)
 
 深色主题：
 
@@ -38,7 +47,9 @@
 
 1. 装：`dsh plugin --profile desktop add github:wojiao42/dsh-token-cost`（或从插件市场安装），刷新页面。
 2. 看侧栏底部那三行：全部会话 / 当前任务 / 截至时刻。
-3. **鼠标悬停**看明细；若某些后台任务还没取到数据，点底部 **「载入其余会话 · N」**。
+3. **鼠标悬停**看明细，再**悬停某一行**看该会话的逐轮用量；若某些后台任务还没取到数据，
+   点底部 **「载入其余会话 · N」**。
+4. 逐轮用量由 Host 半侧提供：**改过 `index.js` 后需要重启一次 Harness**（客户端会提示）。
 
 ## 界面
 
@@ -51,6 +62,7 @@
 | 面板头部 | 合计金额；元信息：会话数 / 运行中数 / 缓存命中率 / 最高占用 / **截至时刻 / 整体 tok/s / 平均首 token** |
 | 面板列表 | 每行两行：标题行（圆点、标题、token、费用、占用%）+ **时间行**（见下） |
 | 词条 | `运行中 12m` / `最近 3m` · `7轮 12步` · `首token 1.2s` · `模型 4m` · `工具 3m` · `23.8 tok/s` |
+| **逐轮预览** | **悬停某一行**在面板右侧弹出：`第 12 轮  74.5k  ≈¥0.0210  1m · 00:19`；未闭合轮标「进行中」，用量不可证明时那两列显示 `—`；底部提示「仅显示最近 4 / 12 轮」 |
 | 面板底部 | 「载入其余会话 · N」（仅在还有会话没取到数据时出现） |
 
 
@@ -79,8 +91,21 @@
 | 解码 `tok/s` | `sessionStats.decodeTokens / decodeMs` | 精确 |
 
 **没有的东西**：投影里不带「本次运行开始的绝对时刻」，所以运行时长的起点只能用客户端观察值近似。
-「今日花费 / 近 5 分钟花费」这类按时间分桶的账目需要事件时间，现有投影不提供——
-要做就得给插件加 Host 半侧接口（目前 `index.js` 是空实现）。
+「今日花费 / 近 5 分钟花费」这类按时间分桶的账目需要事件时间，现有投影不提供。
+
+### 逐轮用量从哪来
+
+| 项 | 做法 |
+|---|---|
+| 数据源 | 该会话的**日志事件**：Host 半侧用 `ctx.sessionQuery.read(id)` 读（冷会话走持久化日志，活跃会话走 live 分支） |
+| 折叠 | 官方 `@deepseek-ai/dsh-token-meter` 的 `deriveTurnTokenUsage`（逐次尝试、重试、闭合校验都在里面），与聊天里的「本轮用量」同源 |
+| 接口 | `GET /token-cost/turns?sessionId=<id>&limit=30[&refresh=1]` |
+| 缓存 | Host 侧按会话缓存 15 秒，客户端再缓存 15 秒；悬停有 140ms 防抖，指针扫过不会连发请求 |
+| 返回范围 | 只回最近 N 轮（默认 30、上限 200），回包带 `totalTurns` 与 `truncated` |
+| 显示 `—` | 官方折叠在「活动未闭合 / 计数不安全 / 与总量矛盾」时判定不可用，插件照原样显示，不猜 |
+
+> **改过 `index.js` 必须重启 Harness 一次**（Host 模块不参与热重载，`dsh-hmr` 只做组合层）。
+> 重启前客户端会显示「逐轮数据需要重启一次 Harness」。
 
 ## 单价与费用
 
@@ -132,10 +157,11 @@ profile 的 `package.json` 里登记为组合包（**必须**用 pnpm 的 `link:
 | 文件 | 作用 |
 |---|---|
 | `package.json` | 插件清单：`dsh.bundle.patch` 与 `dsh.client`（`platform: web`、`immediately`、`inject: dsh-client-ui-sidebar`） |
-| `index.js` | Host 半侧：不注册任何东西，只为让本包成为一条正常的 Loader 行 |
+| `index.js` | Host 半侧：注册 `GET /token-cost/turns`，按需读会话日志并折叠出逐轮用量（改动需重启一次 Harness） |
 | `client.js` | 浏览器半侧：侧栏两行徽标 + 明细面板（构建产物直接提交，git 安装不跑构建） |
 | `cordis.patch.yml` | 组合包 patch：插入 `token-cost` 行（`name` 必须等于包名） |
-| `tools/plugin-summary-test.cjs` | 30 项离线断言（假 React/ReactDOM/hook harness，不需要浏览器） |
+| `tools/plugin-summary-test.cjs` | 44 项离线断言（假 React/ReactDOM/hook harness，不需要浏览器） |
+| `tools/turns-test.mjs` | 25 项离线断言：逐轮切分 + 折叠接线 + 路由契约（假 ctx / 假 sessionQuery） |
 | `tools/verify-live.cjs` | 检查运行中的 Host 是否已在提供当前版本 |
 | `tools/extract-theme.cjs` | 从本机 `app.asar` 抽出主题样式表（纯 node 读 asar），供出图用 |
 | `tools/render-panel.mjs` | 把真实组件渲染成 HTML + 无头 Chrome 出商店截图 |
@@ -152,18 +178,21 @@ mtime/ctime/size），所以改完 `client.js` 要重挂一次这个包：
 2. **等价的文件做法**：把该包从 profile 的 `dsh.profile.bundles` 里删掉，等几秒
    （`dsh-hmr` 会重新组合 profile，旧 rev 立刻 404），再加回末尾。
 
-Host 半侧 `index.js` 是空实现，所以没有需要重启 Harness 的部分。
+**Host 半侧 `index.js` 改动必须重启 Harness**：Node 的 ESM 模块缓存按文件 URL 命中，
+重挂组合包不会重新求值 Host 模块（DSH 也禁用了模块根热重载）。客户端在路由 404 时会提示这件事。
 
 ## 测试
 
 ```
-node plugins/dsh-token-cost/tools/plugin-summary-test.cjs   # 30 项：注册面、两行徽标、当前任务标记、
+node plugins/dsh-token-cost/tools/plugin-summary-test.cjs   # 44 项：注册面、三行徽标、当前任务标记、
                                                             #   金额算式、排序、未知模型、冷会话取证、
-                                                            #   载入其余、空列表、注入源
+                                                            #   载入其余、空列表、注入源、时间明细、
+                                                            #   悬停展开、逐轮预览取数
+node plugins/dsh-token-cost/tools/turns-test.mjs            # 25 项：逐轮切分、折叠接线、路由契约
 node plugins/dsh-token-cost/tools/verify-live.cjs           # 运行中的 Host 是否已在提供当前版本
 ```
 
-两个脚本的退出码都必须为 0。
+三个脚本的退出码都必须为 0。
 
 ## 投稿到插件市场
 

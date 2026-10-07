@@ -91,6 +91,8 @@ function createReact(forceOpen) {
     },
     useEffect() { cursor++; },
     useSyncExternalStore(_subscribe, getSnapshot) { cursor++; return getSnapshot(); },
+    /** 每次渲染前归零 hook 游标——否则第二次渲染会读到新槽位（状态全丢）。 */
+    __beginRender() { cursor = 0; },
   };
   return React;
 }
@@ -214,11 +216,23 @@ const ZH = {
   ttft: '首token',
   llm: '模型',
   tool: '工具',
+  turnsTitle: '逐轮用量',
+  turn: '第',
+  turnsUnit: '轮',
+  openTurn: '进行中',
+  loading: '读取中…',
+  loadFailed: '读取失败',
+  noTurns: '还没有任何轮次',
+  truncatedTurns: '仅显示最近',
+  foldUnavailable: '无法折叠逐轮用量（缺少官方折叠函数）',
+  needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
 };
 
-// `renderWithOpen(open)`：`open=true` 时让组件第一个 useState 返回 true（面板展开态）
-function renderWithOpen(open, wide = true) {
-  const react = createReact(open);
+/**
+ * 挂载组件：返回 `(props) => 渲染树`。复用同一个 React 实例再渲染一次，
+ * hook 状态会保留——逐轮预览就是这样出图的（第一次挂悬停，第二次带出浮层）。
+ */
+function mount(react) {
   let captured;
   const instance = definition.factory((name) => {
     if (name === 'react') return react;
@@ -240,13 +254,54 @@ function renderWithOpen(open, wide = true) {
     },
     get: () => undefined,
   });
-  return captured.component({
-    t: (key) => ZH[key] ?? key,
-    sessionsSource: { getSnapshot: () => SESSIONS, subscribe: () => () => {} },
-    openSession() {},
-    warmProjections() {},
-    wide,
-  });
+  return captured.component;
+}
+const PROPS = {
+  t: (key) => ZH[key] ?? key,
+  sessionsSource: { getSnapshot: () => SESSIONS, subscribe: () => () => {} },
+  openSession() {},
+  warmProjections() {},
+  wide: true,
+};
+
+/** 深度优先找组件树里的节点。 */
+function walk(node, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out;
+  if (Array.isArray(node)) {
+    for (const child of node) walk(child, out);
+    return out;
+  }
+  out.push(node);
+  for (const child of node.children ?? []) walk(child, out);
+  return out;
+}
+
+/** 逐轮预览用的假响应（虚构数据）。 */
+const TURNS = {
+  sessionId: 's1',
+  totalTurns: 12,
+  truncated: true,
+  folded: true,
+  turns: [
+    { turn: 12, startTime: Date.now() - 240_000, endTime: Date.now() - 150_000, steps: 3, closed: true, usage: { uncachedInputTokens: 8_400, cacheReadTokens: 62_000, cacheWriteTokens: 0, outputTokens: 4_100 } },
+    { turn: 11, startTime: Date.now() - 700_000, endTime: Date.now() - 520_000, steps: 2, closed: true, usage: { uncachedInputTokens: 5_200, cacheReadTokens: 41_000, cacheWriteTokens: 0, outputTokens: 2_600 } },
+    { turn: 10, startTime: Date.now() - 1_500_000, endTime: Date.now() - 1_260_000, steps: 4, closed: true, usage: { uncachedInputTokens: 11_000, cacheReadTokens: 88_000, cacheWriteTokens: 0, outputTokens: 7_300 } },
+    { turn: 9, startTime: Date.now() - 2_600_000, endTime: null, steps: 1, closed: false, usage: null },
+  ],
+};
+
+/** 悬停某行 → 逐轮预览（同一 React 实例渲染两次）。 */
+async function turnsPage(dark) {
+  globalThis.fetch = async () => ({ ok: true, json: async () => TURNS });
+  const react = createReact(true);
+  const component = mount(react);
+  react.__beginRender();
+  const first = component(PROPS);
+  const row = walk(first).find((node) => node.props?.className === 'tcs-row');
+  row?.props?.onMouseEnter?.();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  react.__beginRender();
+  return page(component(PROPS), { dark });
 }
 
 // ── 页面 ───────────────────────────────────────────────────────────────────
@@ -258,6 +313,7 @@ const PAGE_CSS = [
   'border-radius:14px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base));border:.5px solid var(--dsw-alias-border-l2)}',
   '.sidebar .cap{display:block;margin:0 8px 8px;font-size:12px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary))}',
   '.tcs-panel{position:absolute !important;left:16px !important;bottom:112px !important}',
+  '.tcs-turns{position:absolute !important;left:396px !important;bottom:112px !important}',
 ].join('');
 
 function page(tree, { dark }) {
@@ -298,14 +354,23 @@ function shoot(browser, html, outFile, size) {
 }
 
 const browser = findBrowser();
+/** 渲染一次（每次渲染前归零 hook 游标）。 */
+const view = (forceOpen, props = PROPS) => {
+  const react = createReact(forceOpen);
+  const component = mount(react);
+  react.__beginRender();
+  return component(props);
+};
+
 const shots = [
-  ['screenshot-1-badge.png', page(renderWithOpen(false), { dark: false }), '380,200'],
-  ['screenshot-2-panel.png', page(renderWithOpen(true), { dark: false }), '560,640'],
-  ['screenshot-3-dark.png', page(renderWithOpen(true), { dark: true }), '560,640'],
+  ['screenshot-1-badge.png', () => page(view(false), { dark: false }), '380,200'],
+  ['screenshot-2-panel.png', () => page(view(true), { dark: false }), '560,640'],
+  ['screenshot-3-dark.png', () => page(view(true), { dark: true }), '560,640'],
+  ['screenshot-4-turns.png', () => turnsPage(false), '900,660'],
 ];
 console.log('浏览器:', browser);
 console.log('主题 CSS:', themeCss === '' ? '(缺失，用兜底变量)' : `${(themeCss.length / 1024).toFixed(1)} KB`);
-for (const [name, html, size] of shots) {
-  const bytes = shoot(browser, html, path.join(assets, name), size);
+for (const [name, makeHtml, size] of shots) {
+  const bytes = shoot(browser, await makeHtml(), path.join(assets, name), size);
   console.log(`  ${name}  ${(bytes / 1024).toFixed(0)} KB  (${size})`);
 }

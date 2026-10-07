@@ -75,6 +75,16 @@ window.__ModuleLoader__.load({
       current: '当前',
       asOf: '截至',
       ago: '最近',
+      turnsTitle: '逐轮用量',
+      turn: '第',
+      turnsUnit: '轮',
+      openTurn: '进行中',
+      loading: '读取中…',
+      loadFailed: '读取失败',
+      noTurns: '还没有任何轮次',
+      truncatedTurns: '仅显示最近',
+      foldUnavailable: '无法折叠逐轮用量（缺少官方折叠函数）',
+      needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
       now: '刚刚',
       turns: '轮',
       steps: '步',
@@ -98,6 +108,16 @@ window.__ModuleLoader__.load({
       current: 'Now',
       asOf: 'as of',
       ago: 'last',
+      turnsTitle: 'Per-turn usage',
+      turn: 'turn',
+      turnsUnit: 'turns',
+      openTurn: 'open',
+      loading: 'loading…',
+      loadFailed: 'load failed',
+      noTurns: 'no turns yet',
+      truncatedTurns: 'last',
+      foldUnavailable: 'per-turn fold unavailable',
+      needRestart: 'per-turn data needs one Harness restart (host half changed)',
       now: 'just now',
       turns: ' turns',
       steps: ' steps',
@@ -148,6 +168,25 @@ window.__ModuleLoader__.load({
       '.tcs-money{text-align:right;color:var(--dsw-alias-label-secondary)}',
       '.tcs-percent{text-align:right;color:var(--dsw-alias-label-tertiary)}',
       '.tcs-empty{padding:8px 4px;color:var(--dsw-alias-label-tertiary)}',
+      '.tcs-turns{position:fixed;z-index:81;box-sizing:border-box;width:328px;padding:10px 12px 8px;overflow:auto;',
+      'border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg,16px);',
+      'background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));',
+      'box-shadow:var(--dsw-elevation-panel,0 6px 24px rgba(0,0,0,.18));color:var(--dsw-alias-label-primary);',
+      'font-size:var(--dsh-content-font-size-secondary,13px)}',
+      '.tcs-turnsHead{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding-bottom:6px;',
+      'border-bottom:1px solid var(--dsw-alias-border-l2)}',
+      '.tcs-turnsTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}',
+      '.tcs-turnsMeta{flex:none;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
+      'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
+      '.tcs-turnsList{display:flex;flex-direction:column;gap:1px;padding-top:4px}',
+      '.tcs-turn{display:grid;grid-template-columns:auto 1fr auto auto;align-items:baseline;gap:8px;padding:2px 0}',
+      '.tcs-turnNo{white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
+      '.tcs-turnTokens{text-align:right;color:var(--dsw-alias-label-tertiary)}',
+      '.tcs-turnMoney{text-align:right;font-variant-numeric:tabular-nums}',
+      '.tcs-turnWhen{text-align:right;white-space:nowrap;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
+      'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
+      '.tcs-turnsNote{padding-top:6px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
+      'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px)}',
       '.tcs-more{margin-top:6px;padding:3px 8px;border:.5px solid var(--dsw-alias-border-l2);border-radius:999px;',
       'background:0 0;color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer}',
       '.tcs-more:hover{background:var(--dsw-alias-interactive-bg-hover)}',
@@ -353,7 +392,52 @@ window.__ModuleLoader__.load({
         .join(' · ');
     }
 
-    function summaryRow(row, tr, onOpen, currentId, now) {
+    /** 逐轮预览缓存：sessionId → { at, data }。 */
+    const turnCache = new Map();
+    const TURN_CACHE_TTL_MS = 15_000;
+    /** 悬停到某行后延迟多久取数，避免指针扫过时连发请求。 */
+    const PREVIEW_DELAY_MS = 140;
+    /** 面板与逐轮预览的宽度（预览贴在面板旁边）。 */
+    const PANEL_WIDTH = 364;
+    const TURNS_WIDTH = 328;
+
+    /** 一轮用量的展示数据（纯函数，便于离线断言）。 */
+    function turnView(turn, price, openLabel) {
+      const usage = turn.usage;
+      const cost = usage === null || usage === undefined ? null : costOf(usage, price);
+      const billed =
+        usage === null || usage === undefined
+          ? null
+          : asNumber(usage.uncachedInputTokens) +
+            asNumber(usage.cacheReadTokens) +
+            asNumber(usage.cacheWriteTokens) +
+            asNumber(usage.outputTokens);
+      const duration =
+        typeof turn.startTime === 'number' && typeof turn.endTime === 'number' && turn.endTime >= turn.startTime
+          ? fmtDuration(turn.endTime - turn.startTime)
+          : null;
+      const when = typeof turn.startTime === 'number' ? fmtClock(turn.startTime) : null;
+      return {
+        tokens: billed === null ? '—' : fmtCompact(billed),
+        amount: cost === null ? '—' : cost.total > 0 ? '≈' + fmtMoney(cost.total) : '¥0',
+        when: [duration, when, turn.closed === false ? openLabel : null].filter((part) => part !== null).join(' · '),
+      };
+    }
+
+    /** 一行逐轮用量：轮号 / token / 费用 / 用时与时刻。 */
+    function turnRow(turn, tr, price) {
+      const view = turnView(turn, price, tr('openTurn'));
+      return h(
+        'div',
+        { className: 'tcs-turn', key: String(turn.turn) },
+        h('span', { className: 'tcs-turnNo' }, tr('turn') + ' ' + String(turn.turn)),
+        h('span', { className: 'tcs-turnTokens' }, view.tokens),
+        h('span', { className: 'tcs-turnMoney' }, view.amount),
+        h('span', { className: 'tcs-turnWhen' }, view.when),
+      );
+    }
+
+    function summaryRow(row, tr, onOpen, currentId, now, onPreview) {
       const props = {
         key: row.id,
         type: 'button',
@@ -363,6 +447,10 @@ window.__ModuleLoader__.load({
         'data-current': row.id === currentId ? 'true' : 'false',
       };
       if (typeof onOpen === 'function') props.onClick = () => onOpen(row.id);
+      if (typeof onPreview === 'function') {
+        props.onMouseEnter = () => onPreview(row.id);
+        props.onFocus = () => onPreview(row.id);
+      }
       return h(
         'button',
         props,
@@ -440,6 +528,8 @@ window.__ModuleLoader__.load({
         const close = () => {
           setOpen(false);
           setPinned(false);
+          setPreview(null);
+          cancelPreview();
         };
         const onPointerDown = (event) => {
           const root = rootRef.current;
@@ -482,6 +572,71 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         trackRunning(summary.rows, Date.now());
       });
+
+      const [preview, setPreview] = React.useState(null);
+      const previewTimer = React.useRef(null);
+      const previewAbort = React.useRef(null);
+      const cancelPreview = () => {
+        if (previewTimer.current !== null) {
+          clearTimeout(previewTimer.current);
+          previewTimer.current = null;
+        }
+        if (previewAbort.current !== null) {
+          previewAbort.current.abort();
+          previewAbort.current = null;
+        }
+      };
+      React.useEffect(() => () => cancelPreview(), []);
+
+      /** 取某会话的逐轮用量（带 15 秒缓存）。 */
+      const loadTurns = (sessionId, force) => {
+        const cached = turnCache.get(sessionId);
+        if (force !== true && cached !== undefined && Date.now() - cached.at < TURN_CACHE_TTL_MS) {
+          setPreview({ id: sessionId, state: 'ready', ...cached.data });
+          return;
+        }
+        cancelPreview();
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        previewAbort.current = controller;
+        setPreview({ id: sessionId, state: 'loading' });
+        fetch(
+          '/token-cost/turns?sessionId=' + encodeURIComponent(sessionId) + '&limit=30',
+          controller === null ? undefined : { signal: controller.signal },
+        )
+          .then((response) => {
+            if (response.ok) return response.json();
+            const failure = new Error('HTTP ' + String(response.status));
+            // 404 = Host 半侧还没加载（改过 index.js 后需要重启一次 Harness）
+            failure.unavailable = response.status === 404;
+            return Promise.reject(failure);
+          })
+          .then((data) => {
+            turnCache.set(sessionId, { at: Date.now(), data });
+            setPreview({ id: sessionId, state: 'ready', ...data });
+          })
+          .catch((error) => {
+            if (controller !== null && controller.signal.aborted) return;
+            setPreview({
+              id: sessionId,
+              state: 'error',
+              error: String(error?.message ?? error),
+              unavailable: error?.unavailable === true,
+            });
+          })
+          .finally(() => {
+            if (previewAbort.current === controller) previewAbort.current = null;
+          });
+      };
+
+      /** 指针进入某行：延迟取数，避免扫过时连发请求。 */
+      const openTurns = (sessionId) => {
+        cancelPreview();
+        if (typeof fetch !== 'function') return;
+        previewTimer.current = setTimeout(() => {
+          previewTimer.current = null;
+          loadTurns(sessionId);
+        }, PREVIEW_DELAY_MS);
+      };
 
       const totals = summary.totals;
       if (totals.billed === 0 && totals.active === 0) return null;
@@ -540,6 +695,8 @@ window.__ModuleLoader__.load({
         leaveTimer.current = setTimeout(() => {
           leaveTimer.current = null;
           setOpen(false);
+          setPreview(null);
+          cancelPreview();
         }, 220);
       };
 
@@ -599,7 +756,7 @@ window.__ModuleLoader__.load({
                 { className: 'tcs-list' },
                 visible.length === 0
                   ? h('div', { className: 'tcs-empty' }, tr('empty'))
-                  : visible.map((row) => summaryRow(row, tr, onOpen, currentId, now)),
+                  : visible.map((row) => summaryRow(row, tr, onOpen, currentId, now, openTurns)),
               ),
               h('div', { className: 'tcs-hint' }, tr('hint')),
               totals.unpriced > 0 ? h('div', { className: 'tcs-hint' }, tr('unpriced')) : null,
@@ -625,6 +782,80 @@ window.__ModuleLoader__.load({
           )
         : null;
 
+      const previewRow = preview === null ? undefined : summary.rows.find((row) => row.id === preview.id);
+      const previewPrice =
+        previewRow !== undefined && previewRow.model !== null && Object.hasOwn(PRICES, previewRow.model)
+          ? PRICES[previewRow.model]
+          : null;
+      const previewLeft = (() => {
+        const base = position === null ? 12 : position.left;
+        const right = base + PANEL_WIDTH + 8;
+        if (typeof window === 'undefined') return right;
+        return right + TURNS_WIDTH <= window.innerWidth ? right : Math.max(8, base - TURNS_WIDTH - 8);
+      })();
+      const turnsPanel =
+        preview === null || open !== true
+          ? null
+          : ReactDOM.createPortal(
+              h(
+                'div',
+                {
+                  className: 'tcs-turns',
+                  'data-turn-preview': preview.id,
+                  onMouseEnter: cancelLeave,
+                  onMouseLeave: scheduleLeave,
+                  style: {
+                    left: previewLeft,
+                    bottom: position === null ? 64 : position.bottom,
+                    maxHeight: 'min(70vh, 520px)',
+                  },
+                },
+                h(
+                  'div',
+                  { className: 'tcs-turnsHead' },
+                  h('span', { className: 'tcs-turnsTitle' }, previewRow === undefined ? tr('turnsTitle') : previewRow.title),
+                  h('span', { className: 'tcs-turnsMeta' }, previewRow === undefined ? '' : tr('turnsTitle')),
+                ),
+                preview.state === 'loading'
+                  ? h('div', { className: 'tcs-turnsNote' }, tr('loading'))
+                  : preview.state === 'error'
+                    ? h(
+                        'div',
+                        { className: 'tcs-turnsNote' },
+                        preview.unavailable === true
+                          ? tr('needRestart')
+                          : tr('loadFailed') + '：' + String(preview.error ?? ''),
+                      )
+                    : h(
+                        'div',
+                        { className: 'tcs-turnsList' },
+                        (preview.turns ?? []).length === 0
+                          ? h('div', { className: 'tcs-turnsNote' }, tr('noTurns'))
+                          : (preview.turns ?? [])
+                              .slice()
+                              .reverse()
+                              .map((turn) => turnRow(turn, tr, previewPrice)),
+                      ),
+                preview.state === 'ready' && preview.truncated === true
+                  ? h(
+                      'div',
+                      { className: 'tcs-turnsNote' },
+                      tr('truncatedTurns') +
+                        ' ' +
+                        String((preview.turns ?? []).length) +
+                        ' / ' +
+                        String(preview.totalTurns ?? 0) +
+                        ' ' +
+                        tr('turnsUnit'),
+                    )
+                  : null,
+                preview.state === 'ready' && preview.folded !== true
+                  ? h('div', { className: 'tcs-turnsNote' }, tr('foldUnavailable'))
+                  : null,
+              ),
+              document.body,
+            );
+
       return h(
         'div',
         { className: 'tcs-root', ref: rootRef, 'data-token-cost': 'summary' },
@@ -647,6 +878,7 @@ window.__ModuleLoader__.load({
           label,
         ),
         panel,
+        turnsPanel,
       );
     }
 
@@ -675,6 +907,7 @@ window.__ModuleLoader__.load({
       );
     }
 
-    return { name: 'token-cost', inject, apply };
+    // __internals 只给离线测试用（插件加载器忽略额外字段）
+    return { name: 'token-cost', inject, apply, __internals: { turnView } };
   },
 });
