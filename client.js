@@ -739,10 +739,8 @@ window.__ModuleLoader__.load({
       const money = totals.cost > 0 ? '≈' + fmtMoney(totals.cost) : null;
       const currentId = currentSessionIdOf(sessions);
       const current = currentId === undefined ? undefined : summary.rows.find((row) => row.id === currentId);
-      const clock = totals.asOf > 0 ? fmtClock(totals.asOf) : null;
-      const totalLine =
-        (money ?? fmtCompact(totals.billed) + ' ' + tr('tokens')) +
-        (clock === null ? '' : ' · ' + tr('asOf') + ' ' + clock);
+      // 徽标只留金额：截至时刻放到悬停展开的面板元信息里（见 totals.asOf 那一行）
+      const totalLine = money ?? fmtCompact(totals.billed) + ' ' + tr('tokens');
       const currentLine =
         current === undefined
           ? null

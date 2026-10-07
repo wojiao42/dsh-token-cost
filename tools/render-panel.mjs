@@ -231,6 +231,7 @@ const ZH = {
   foldUnavailable: '无法折叠逐轮用量（缺少官方折叠函数）',
   needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
   approx: '近似',
+  asOf: '截至',
   untitledTurn: '（这一轮没有输入记录）',
 };
 

@@ -208,10 +208,10 @@ const badge = render({ useSessions, t, openSession: (id) => opened.push(id), war
 const badgeNodes = collect(badge);
 const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').map((entry) => entry.text);
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('badge shows two compact lines: total with the as-of clock, then the current task',
+assertEqual('badge shows two compact lines: total, then the current task',
   [badgeKeys, badgeValues.map(clockless)],
-  [['全部', '当前'], ['≈¥0.00658 · 截至 HH:MM', '≈¥0.00258 · 50.0%']]);
-assert('the as-of clock is a local HH:MM', / · 截至 \d{2}:\d{2}$/.test(badgeValues[0] ?? ''));
+  [['全部', '当前'], ['≈¥0.00658', '≈¥0.00258 · 50.0%']]);
+assert('the badge no longer carries the as-of clock', !/截至/.test(badgeValues.join(' ')));
 assert('a running session shows as a dot on the total line',
   collect(badge).some((entry) => entry.className === 'tcs-dot' && entry.node.props['data-running'] === 'true'));
 assert('badge uses summary icon', badgeNodes.some((entry) => entry.node.type === 'svg'));
@@ -234,6 +234,7 @@ assert('panel head shows estimate', byClass('tcs-headValue')[0].text === '≈¥0
 const meta = byClass('tcs-meta')[0].node.children.filter((child) => child !== null).map((child) => child.children.join(''));
 const rows = byClass('tcs-row');
 assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '≤50.0%']);
+assert('the as-of clock lives in the panel meta line', meta.some((line) => /截至 \d{2}:\d{2}/.test(line)));
 assertEqual('meta line adds as-of / decode rate / ttft',
   meta.slice(4).map((line) => line.replace(/\d{2}:\d{2}/, 'HH:MM')),
   ['截至 HH:MM', '18.8 tok/s', '首token 1.1s']);
@@ -305,7 +306,7 @@ assert('missing useSessions degrades to nothing', noHook === null || noHook === 
 const fakeSource = { getSnapshot: () => SESSIONS, subscribe: () => () => {} };
 const viaSource = render({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
 const viaSourceValues = collect(viaSource).filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2).map(clockless), ['≈¥0.00658 · 截至 HH:MM', '≈¥0.00258 · 50.0%']);
+assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.00658', '≈¥0.00258 · 50.0%']);
 
 // --- 悬停展开（点击 = 钉住）
 globalThis.__FORCE_OPEN__ = false;
