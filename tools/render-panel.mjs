@@ -104,10 +104,14 @@ const escapeText = (value) => String(value).replace(/&/g, '&amp;').replace(/</g,
 const escapeAttr = (value) => escapeText(value).replace(/"/g, '&quot;');
 const kebab = (name) => name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 
+// React 会给数值型长度自动补 px；序列化时照做，否则 `top:150` 是非法 CSS，
+// 截图里预览会跑到静态位置上去（真实浏览器里 React 会补，所以这个问题只在出图侧）。
+const UNITLESS = new Set(['zIndex', 'opacity', 'flexGrow', 'flexShrink', 'order', 'lineHeight', 'fontWeight', 'zoom']);
+
 function serializeStyle(style) {
   return Object.entries(style)
     .filter(([, value]) => value !== undefined && value !== null)
-    .map(([key, value]) => `${kebab(key)}:${value}`)
+    .map(([key, value]) => `${kebab(key)}:${typeof value === 'number' && !UNITLESS.has(key) ? value + 'px' : value}`)
     .join(';');
 }
 
@@ -295,27 +299,50 @@ const TURNS = {
 /** 悬停某行 → 逐轮预览（同一 React 实例渲染两次）。 */
 async function turnsPage(dark) {
   globalThis.fetch = async () => ({ ok: true, json: async () => TURNS });
+  // 预览的落位取决于视口高度与那一行的坐标，出图前把两者固定下来。
+  // top 取列表第一行在页面里的实际位置，截图看起来才自洽。
+  const ROW_RECT = { top: 190, bottom: 224 };
+  if (globalThis.window !== undefined) {
+    globalThis.window.innerWidth = 900;
+    globalThis.window.innerHeight = 660;
+  }
   const react = createReact(true);
   const component = mount(react);
   react.__beginRender();
   const first = component(PROPS);
   const row = walk(first).find((node) => node.props?.className === 'tcs-row');
-  row?.props?.onMouseEnter?.();
+  // 传真实的 currentTarget：预览必须按这一行的视口坐标锚定，而不是贴在屏幕下方。
+  row?.props?.onMouseEnter?.({ currentTarget: { getBoundingClientRect: () => ROW_RECT } });
   await new Promise((resolve) => setTimeout(resolve, 250));
   react.__beginRender();
-  return page(component(PROPS), { dark });
+  const html = page(component(PROPS), { dark });
+
+  // 自检：锚定错了就报错，别悄悄出一张错的图。
+  const turnsTag = /<div class="tcs-turns"[^>]*style="([^"]*)"/.exec(html);
+  if (turnsTag === null) throw new Error('逐轮预览没渲染出来');
+  const style = turnsTag[1];
+  if (!style.includes(`top:${ROW_RECT.top}px`) || style.includes('bottom:')) {
+    throw new Error('逐轮预览没有锚定到被悬停的那一行，实际 style=' + style);
+  }
+  return html;
 }
 
 // ── 页面 ───────────────────────────────────────────────────────────────────
 const PAGE_CSS = [
   'html,body{margin:0;padding:0}',
   'body{background:var(--dsw-alias-bg-base);font-family:var(--dsw-font-family,system-ui,sans-serif);color:var(--dsw-alias-label-primary)}',
-  '.canvas{position:relative;box-sizing:border-box;width:100%;height:100vh;padding:16px}',
-  '.sidebar{position:absolute;left:16px;bottom:16px;box-sizing:border-box;width:248px;padding:10px 10px 12px;',
+  // canvas 是定位祖先：harness 的 createPortal 桩会把 portal 摊平成组件子节点，
+  // 于是面板和逐轮预览都落在 .sidebar 里面。侧栏若自身 position:absolute，
+  // 预览的 top/left 就会相对侧栏算，跑到画面外（旧截图"贴在下方"的假象就是这么来的）。
+  '.canvas{position:relative;box-sizing:border-box;width:100%;height:100vh;padding:16px;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-start}',
+  '.sidebar{box-sizing:border-box;width:248px;padding:10px 10px 12px;',
   'border-radius:14px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base));border:.5px solid var(--dsw-alias-border-l2)}',
   '.sidebar .cap{display:block;margin:0 8px 8px;font-size:12px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary))}',
-  '.tcs-panel{position:absolute !important;left:16px !important;bottom:112px !important}',
-  '.tcs-turns{position:absolute !important;left:396px !important;bottom:112px !important}',
+  // 组件在真实界面里就用 position:fixed（视口坐标）。整页截图只有一个视口高，
+  // 所以照搬 fixed 即可；改成 absolute 会让定位祖先后退到 .tcs-root
+  // （position:relative 的徽标本身，只有 248px 宽），预览的 top 相对它算就跑到视口外。
+  '.tcs-panel{left:16px !important;bottom:112px !important}',
+  '.tcs-turns{position:fixed !important}',
 ].join('');
 
 function page(tree, { dark }) {

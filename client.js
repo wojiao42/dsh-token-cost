@@ -472,8 +472,8 @@ window.__ModuleLoader__.load({
       };
       if (typeof onOpen === 'function') props.onClick = () => onOpen(row.id);
       if (typeof onPreview === 'function') {
-        props.onMouseEnter = () => onPreview(row.id);
-        props.onFocus = () => onPreview(row.id);
+        props.onMouseEnter = (event) => onPreview(row.id, event?.currentTarget);
+        props.onFocus = (event) => onPreview(row.id, event?.currentTarget);
       }
       return h(
         'button',
@@ -598,6 +598,8 @@ window.__ModuleLoader__.load({
       });
 
       const [preview, setPreview] = React.useState(null);
+      /** 被悬停那一行的视口坐标（逐轮预览要贴着它展开，不能贴在屏幕下方）。 */
+      const [previewAnchor, setPreviewAnchor] = React.useState(null);
       const previewTimer = React.useRef(null);
       const previewAbort = React.useRef(null);
       const cancelPreview = () => {
@@ -653,8 +655,15 @@ window.__ModuleLoader__.load({
       };
 
       /** 指针进入某行：延迟取数，避免扫过时连发请求。 */
-      const openTurns = (sessionId) => {
+      const openTurns = (sessionId, node) => {
         cancelPreview();
+        // 记住这一行的位置：预览面板要贴着它（右侧、顶部对齐）展开。
+        if (node !== null && node !== undefined && typeof node.getBoundingClientRect === 'function') {
+          const rect = node.getBoundingClientRect();
+          if (Number.isFinite(rect?.top) && Number.isFinite(rect?.bottom)) {
+            setPreviewAnchor({ top: rect.top, bottom: rect.bottom });
+          }
+        }
         if (typeof fetch !== 'function') return;
         previewTimer.current = setTimeout(() => {
           previewTimer.current = null;
@@ -720,6 +729,7 @@ window.__ModuleLoader__.load({
           leaveTimer.current = null;
           setOpen(false);
           setPreview(null);
+          setPreviewAnchor(null);
           cancelPreview();
         }, 220);
       };
@@ -817,6 +827,30 @@ window.__ModuleLoader__.load({
         if (typeof window === 'undefined') return right;
         return right + TURNS_WIDTH <= window.innerWidth ? right : Math.max(8, base - TURNS_WIDTH - 8);
       })();
+
+      /**
+       * 纵向锚定到**被悬停的那一行**，而不是跟主面板共用一个 bottom。
+       * 之前预览固定在屏幕下方那一条线上：悬停靠上的会话行时，指针得跨过聊天区一路往下走，
+       * 主面板的 mouseleave 会先到期（220ms 宽限），预览随即消失——轮次少时面板更矮，更明显。
+       * 现在贴着该行展开，指针只走 8px 横向间隙；下方放不下就翻到行的上方。
+       */
+      const previewBox = (() => {
+        const viewport = typeof window === 'undefined' ? 0 : window.innerHeight;
+        const limit = viewport > 0 ? Math.min(viewport * 0.7, 520) : 520;
+        const anchor = previewAnchor;
+        const fallback = () => ({
+          bottom: position === null ? 64 : position.bottom,
+          maxHeight: limit,
+        });
+        if (anchor === null || !(viewport > 0)) return fallback();
+        const below = viewport - anchor.top - 12;
+        const above = anchor.bottom - 12;
+        if (below >= Math.min(limit, 320) || below >= above) {
+          return { top: Math.max(8, anchor.top), maxHeight: Math.max(160, Math.min(limit, below)) };
+        }
+        return { bottom: Math.max(8, viewport - anchor.bottom), maxHeight: Math.max(160, Math.min(limit, above)) };
+      })();
+
       const turnsPanel =
         preview === null || open !== true
           ? null
@@ -828,11 +862,7 @@ window.__ModuleLoader__.load({
                   'data-turn-preview': preview.id,
                   onMouseEnter: cancelLeave,
                   onMouseLeave: scheduleLeave,
-                  style: {
-                    left: previewLeft,
-                    bottom: position === null ? 64 : position.bottom,
-                    maxHeight: 'min(70vh, 520px)',
-                  },
+                  style: { left: previewLeft, ...previewBox },
                 },
                 h(
                   'div',
