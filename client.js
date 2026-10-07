@@ -86,6 +86,7 @@ window.__ModuleLoader__.load({
       foldUnavailable: '无法折叠逐轮用量（缺少官方折叠函数）',
       needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
       approx: '近似',
+      untitledTurn: '（这一轮没有输入记录）',
       now: '刚刚',
       turns: '轮',
       steps: '步',
@@ -120,6 +121,7 @@ window.__ModuleLoader__.load({
       foldUnavailable: 'per-turn fold unavailable',
       needRestart: 'per-turn data needs one Harness restart (host half changed)',
       approx: 'approx',
+      untitledTurn: '(no prompt recorded)',
       now: 'just now',
       turns: ' turns',
       steps: ' steps',
@@ -182,11 +184,15 @@ window.__ModuleLoader__.load({
       '.tcs-turnsMeta{flex:none;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-turnsList{display:flex;flex-direction:column;gap:1px;padding-top:4px}',
-      '.tcs-turn{display:grid;grid-template-columns:auto 1fr auto auto;align-items:baseline;gap:8px;padding:2px 0}',
+      '.tcs-turn{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:baseline;gap:4px 8px;padding:3px 0;',
+      'border-bottom:.5px solid color-mix(in srgb,var(--dsw-alias-border-l2) 45%,transparent)}',
+      '.tcs-turn:last-child{border-bottom:none}',
+      '.tcs-turnTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.tcs-turnNo{white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
       '.tcs-turnTokens{text-align:right;color:var(--dsw-alias-label-tertiary)}',
       '.tcs-turnMoney{text-align:right;font-variant-numeric:tabular-nums}',
-      '.tcs-turnWhen{text-align:right;white-space:nowrap;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
+      '.tcs-turnWhen{grid-column:2 / -1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+      'color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-turnsNote{padding-top:6px;color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px)}',
@@ -407,7 +413,7 @@ window.__ModuleLoader__.load({
     const TURNS_WIDTH = 328;
 
     /** 一轮用量的展示数据（纯函数，便于离线断言）。 */
-    function turnView(turn, price, openLabel, approxLabel) {
+    function turnView(turn, price, openLabel, approxLabel, untitledLabel) {
       const usage = turn.usage;
       const cost = usage === null || usage === undefined ? null : costOf(usage, price);
       const billed =
@@ -422,10 +428,20 @@ window.__ModuleLoader__.load({
           ? fmtDuration(turn.endTime - turn.startTime)
           : null;
       const when = typeof turn.startTime === 'number' ? fmtClock(turn.startTime) : null;
+      const steps = asNumber(turn.steps);
+      const tools = asNumber(turn.toolCalls);
       return {
+        label: typeof turn.summary === 'string' && turn.summary !== '' ? turn.summary : untitledLabel,
         tokens: billed === null ? '—' : fmtCompact(billed),
         amount: cost === null ? '—' : cost.total > 0 ? '≈' + fmtMoney(cost.total) : '¥0',
-        when: [duration, when, turn.closed === false ? openLabel : null, turn.exact === false ? approxLabel : null]
+        when: [
+          duration,
+          when,
+          steps > 0 ? String(steps) + '步' : null,
+          tools > 0 ? String(tools) + '工具' : null,
+          turn.closed === false ? openLabel : null,
+          turn.exact === false ? approxLabel : null,
+        ]
           .filter((part) => part !== null)
           .join(' · '),
       };
@@ -433,11 +449,12 @@ window.__ModuleLoader__.load({
 
     /** 一行逐轮用量：轮号 / token / 费用 / 用时与时刻。 */
     function turnRow(turn, tr, price) {
-      const view = turnView(turn, price, tr('openTurn'), tr('approx'));
+      const view = turnView(turn, price, tr('openTurn'), tr('approx'), tr('untitledTurn'));
       return h(
         'div',
         { className: 'tcs-turn', key: String(turn.turn) },
         h('span', { className: 'tcs-turnNo' }, tr('turn') + ' ' + String(turn.turn)),
+        h('span', { className: 'tcs-turnTitle', title: view.label }, view.label),
         h('span', { className: 'tcs-turnTokens' }, view.tokens),
         h('span', { className: 'tcs-turnMoney' }, view.amount),
         h('span', { className: 'tcs-turnWhen' }, view.when),

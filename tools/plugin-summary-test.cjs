@@ -331,13 +331,19 @@ assertEqual('turnView prices one turn with the session model',
     flash,
     '进行中',
   ),
-  { tokens: '10.5k', amount: '≈¥0.00258', when: '2m · ' + clock(1000) });
+  { tokens: '10.5k', amount: '≈¥0.00258', when: '2m · ' + clock(1000) + ' · 1步' });
 assertEqual('turnView degrades to dashes when the turn usage cannot be proven',
   turnView({ turn: 4, startTime: 1000, endTime: null, steps: 1, closed: false, usage: null }, flash, '进行中'),
-  { tokens: '—', amount: '—', when: clock(1000) + ' · 进行中' });
+  { tokens: '—', amount: '—', when: clock(1000) + ' · 1步 · 进行中' });
+assertEqual('turnView carries the turn summary and step/tool counts',
+  turnView({ turn: 7, summary: '把徽标压小一点', startTime: 1000, endTime: 61000, steps: 4, toolCalls: 2, closed: true, exact: true, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, flash, '进行中', '近似', '（无输入）'),
+  { label: '把徽标压小一点', tokens: '15', amount: '≈¥0.00002', when: '1m · ' + clock(1000) + ' · 4步 · 2工具' });
+assertEqual('turnView falls back to a placeholder without a summary',
+  turnView({ turn: 8, summary: null, startTime: null, endTime: null, closed: true, usage: null }, flash, '进行中', '近似', '（无输入）').label,
+  '（无输入）');
 assertEqual('turnView flags approximate turns',
   turnView({ turn: 6, startTime: 1000, endTime: 2000, steps: 1, closed: true, exact: false, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, flash, '进行中', '近似').when,
-  '1s · ' + clock(1000) + ' · 近似');
+  '1s · ' + clock(1000) + ' · 1步 · 近似');
 assertEqual('turnView marks an unpriced model with a dash',
   turnView({ turn: 5, startTime: 1000, endTime: 2000, steps: 1, closed: true, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, null, '进行中').amount,
   '—');

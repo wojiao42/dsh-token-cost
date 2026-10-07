@@ -22,22 +22,50 @@ const CACHE_TTL_MS = 15_000;
 
 export const name = 'token-cost';
 
+/** 从 user/message 里抽出可读文本（数组内容取 text 块），压平并截断。 */
+function promptText(data) {
+  const content = data?.content;
+  const text =
+    typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content.map((block) => (block?.type === 'text' ? block.text ?? '' : '')).join(' ')
+        : '';
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat === '') return null;
+  return flat.length > 120 ? `${flat.slice(0, 119)}…` : flat;
+}
+
 /**
  * 把一份按 seq 排列的会话事件切成逐轮的事件片：`turn/start` … `turn/end`。
  * @param {Array<{type: string, time?: number, data?: any}>} events 会话日志事件。
- * @returns {Array<{turn: number, startTime: number|null, endTime: number|null, steps: number, closed: boolean, events: object[]}>}
+ * @returns {Array<{turn: number, startTime: number|null, endTime: number|null, steps: number, toolCalls: number, summary: string|null, closed: boolean, events: object[]}>}
  */
 export function turnsFromEvents(events) {
   const turns = [];
   let current = null;
+  // 触发该轮的那句人话：真人发言优先，找不到就用最近一条 user/message
+  let humanPrompt = null;
+  let anyPrompt = null;
   for (const event of events) {
     if (event === null || typeof event !== 'object') continue;
+    if (event.type === 'user/message') {
+      const text = promptText(event.data);
+      if (text !== null) {
+        anyPrompt = text;
+        if (event.data?.source?.clientTimeZone !== undefined) humanPrompt = text;
+      }
+      if (current !== null && current.summary === null) current.summary = humanPrompt ?? anyPrompt;
+      continue;
+    }
     if (event.type === 'turn/start') {
       current = {
         turn: typeof event.data?.turn === 'number' ? event.data.turn : turns.length + 1,
         startTime: typeof event.time === 'number' ? event.time : null,
         endTime: null,
         steps: 0,
+        toolCalls: 0,
+        summary: humanPrompt ?? anyPrompt,
         closed: false,
         events: [event],
       };
@@ -47,6 +75,7 @@ export function turnsFromEvents(events) {
     if (current === null) continue;
     current.events.push(event);
     if (event.type === 'step/start') current.steps += 1;
+    if (event.type === 'tool/call') current.toolCalls += 1;
     if (event.type === 'turn/end') {
       current.endTime = typeof event.time === 'number' ? event.time : null;
       current.closed = true;
@@ -60,7 +89,7 @@ export function turnsFromEvents(events) {
  * 逐轮折叠用量与时间。
  * @param {object[]} events 会话日志事件。
  * @param {(events: object[]) => object|undefined} [fold] 折叠函数；默认 `foldTurnUsage`（可注入桩做离线测试）。
- * @returns {Array<{turn: number, startTime: number|null, endTime: number|null, steps: number, closed: boolean, usage: object|null}>}
+ * @returns {Array<{turn: number, summary: string|null, startTime: number|null, endTime: number|null, steps: number, toolCalls: number, closed: boolean, usage: object|null, exact: boolean}>}
  */
 export function foldTurns(events, fold) {
   const foldUsage = typeof fold === 'function' ? fold : foldTurnUsage;
@@ -68,9 +97,11 @@ export function foldTurns(events, fold) {
     const usage = foldUsage(turn.events) ?? null;
     return {
       turn: turn.turn,
+      summary: turn.summary,
       startTime: turn.startTime,
       endTime: turn.endTime,
       steps: turn.steps,
+      toolCalls: turn.toolCalls,
       closed: turn.closed,
       usage,
       // 未闭合（还在跑）或折叠器自己标了近似，都算近似

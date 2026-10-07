@@ -78,6 +78,27 @@ assertEqual('a retried turn is flagged approximate',
     { type: 'turn/end', time: 4, data: { turn: 1 } },
   ]).map((turn) => [turn.usage.uncachedInputTokens, turn.exact]),
   [[5, false]]);
+assertEqual('a human prompt before turn/start becomes the turn summary',
+  turnsFromEvents([
+    { type: 'user/message', time: 1, data: { content: [{ type: 'text', text: '  帮我把徽标压小一点  ' }], source: { clientTimeZone: 'Asia/Shanghai' } } },
+    { type: 'turn/start', time: 2, data: { turn: 7 } },
+    { type: 'tool/call', time: 3, data: { turn: 7 } },
+    { type: 'turn/end', time: 4, data: { turn: 7 } },
+  ]).map((turn) => [turn.turn, turn.summary, turn.toolCalls]),
+  [[7, '帮我把徽标压小一点', 1]]);
+assertEqual('a prompt inside the turn also works, and long text is truncated',
+  turnsFromEvents([
+    { type: 'turn/start', time: 1, data: { turn: 1 } },
+    { type: 'user/message', time: 2, data: { content: 'x'.repeat(200) } },
+    { type: 'turn/end', time: 3, data: { turn: 1 } },
+  ]).map((turn) => turn.summary.length),
+  [120]);
+assertEqual('an injected message is used when no human prompt exists',
+  turnsFromEvents([
+    { type: 'user/message', time: 1, data: { content: '自动任务：扫描新增对话' } },
+    { type: 'turn/start', time: 2, data: { turn: 1 } },
+  ]).map((turn) => turn.summary),
+  ['自动任务：扫描新增对话']);
 assertEqual('a turn without reported usage stays null',
   foldTurns([
     { type: 'turn/start', time: 1, data: { turn: 1 } },

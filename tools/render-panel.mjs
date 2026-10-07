@@ -226,6 +226,8 @@ const ZH = {
   truncatedTurns: '仅显示最近',
   foldUnavailable: '无法折叠逐轮用量（缺少官方折叠函数）',
   needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
+  approx: '近似',
+  untitledTurn: '（这一轮没有输入记录）',
 };
 
 /**
@@ -283,10 +285,10 @@ const TURNS = {
   truncated: true,
   folded: true,
   turns: [
-    { turn: 12, startTime: Date.now() - 240_000, endTime: Date.now() - 150_000, steps: 3, closed: true, usage: { uncachedInputTokens: 8_400, cacheReadTokens: 62_000, cacheWriteTokens: 0, outputTokens: 4_100 } },
-    { turn: 11, startTime: Date.now() - 700_000, endTime: Date.now() - 520_000, steps: 2, closed: true, usage: { uncachedInputTokens: 5_200, cacheReadTokens: 41_000, cacheWriteTokens: 0, outputTokens: 2_600 } },
-    { turn: 10, startTime: Date.now() - 1_500_000, endTime: Date.now() - 1_260_000, steps: 4, closed: true, usage: { uncachedInputTokens: 11_000, cacheReadTokens: 88_000, cacheWriteTokens: 0, outputTokens: 7_300 } },
-    { turn: 9, startTime: Date.now() - 2_600_000, endTime: null, steps: 1, closed: false, usage: null },
+    { turn: 12, summary: '把徽标压小一点，别比旁边的按钮高', startTime: Date.now() - 240_000, endTime: Date.now() - 150_000, steps: 3, toolCalls: 1, closed: true, usage: { uncachedInputTokens: 8_400, cacheReadTokens: 62_000, cacheWriteTokens: 0, outputTokens: 4_100 } },
+    { turn: 11, summary: '悬停某个对话能看到逐轮消费吗', startTime: Date.now() - 700_000, endTime: Date.now() - 520_000, steps: 2, toolCalls: 3, closed: true, usage: { uncachedInputTokens: 5_200, cacheReadTokens: 41_000, cacheWriteTokens: 0, outputTokens: 2_600 } },
+    { turn: 10, summary: '侧栏加个截至时间', startTime: Date.now() - 1_500_000, endTime: Date.now() - 1_260_000, steps: 4, toolCalls: 2, closed: true, usage: { uncachedInputTokens: 11_000, cacheReadTokens: 88_000, cacheWriteTokens: 0, outputTokens: 7_300 } },
+    { turn: 9, summary: '顺便把 token 费用也记一下', startTime: Date.now() - 2_600_000, endTime: null, steps: 1, toolCalls: 0, closed: false, exact: false, usage: null },
   ],
 };
 
