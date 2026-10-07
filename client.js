@@ -143,7 +143,7 @@ window.__ModuleLoader__.load({
       'padding:2px 6px;border:none;border-radius:var(--dsw-radius-sm,8px);background:0 0;font:inherit;',
       'font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:1.25;',
       'color:var(--dsw-alias-label-tertiary);white-space:nowrap;font-variant-numeric:tabular-nums}',
-      '.tcs-pill:hover,.tcs-pill[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
+      '.tcs-pill:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}',
       '.tcs-pill svg{flex:none;width:14px;height:14px}',
       '.tcs-lines{display:flex;flex-direction:column;gap:0;min-width:0;text-align:left}',
       '.tcs-line .tcs-dot{flex:none;width:6px;height:6px;align-self:center}',
