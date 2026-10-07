@@ -27,6 +27,7 @@ const PRESENT = {
   '悬停展开 + 点击钉住': 'onMouseEnter',
   '逐轮预览：取数路由': '/token-cost/turns',
   '逐轮预览：浮层': 'tcs-turns',
+  '逐轮浮层白名单（点轮次才会触发跳转）': 'TURNS_PANEL_ID',
   '面板标记当前任务行': "'data-current'",
   '冷会话取证 warmProjections': 'warmProjections',
   '会话列表源 useSyncExternalStore': 'useSyncExternalStore',
