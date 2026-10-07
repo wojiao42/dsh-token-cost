@@ -505,17 +505,30 @@ window.__ModuleLoader__.load({
     /**
      * 一行逐轮用量：轮号 / token / 费用 / 用时与时刻。
      * 整行可点：切到该会话并把主视图落到这一轮（见 {@link jumpToTurn}）。
+     *
+     * 用 `div` + `role="button"`，不用真 `<button>`：真实界面里 `<button>` 会吃到
+     * UA／外壳的按钮样式，凭空多出一圈黑框（离线出图不含外壳 CSS，所以看不出来）。
+     * 外观与改之前一致，可达性用 role/tabIndex + Enter/Space 顶上。
      */
     function turnRow(turn, tr, price, onJump) {
       const view = turnView(turn, price, tr('openTurn'), tr('approx'), tr('untitledTurn'));
+      const clickable = onJump !== undefined;
       return h(
-        'button',
+        'div',
         {
-          type: 'button',
           className: 'tcs-turn',
           key: String(turn.turn),
-          title: onJump === undefined ? view.label : tr('jumpTurn', { turn: turn.turn }),
-          onClick: onJump === undefined ? undefined : () => onJump(turn.turn),
+          role: clickable ? 'button' : undefined,
+          tabIndex: clickable ? 0 : undefined,
+          title: clickable ? tr('jumpTurn', { turn: turn.turn }) : view.label,
+          onClick: clickable ? () => onJump(turn.turn) : undefined,
+          onKeyDown: clickable
+            ? (event) => {
+                if (event?.key !== 'Enter' && event?.key !== ' ') return;
+                if (typeof event.preventDefault === 'function') event.preventDefault();
+                onJump(turn.turn);
+              }
+            : undefined,
         },
         h('span', { className: 'tcs-turnNo' }, tr('turn') + ' ' + String(turn.turn)),
         h('span', { className: 'tcs-turnTitle' }, view.label),

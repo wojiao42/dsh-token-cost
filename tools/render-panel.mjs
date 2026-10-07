@@ -324,9 +324,11 @@ async function turnsPage(dark) {
   const html = page(tree, { dark });
 
   // 自检 1：锚定错了就报错，别悄悄出一张错的图。
-  const turnsTag = /<div class="tcs-turns"[^>]*style="([^"]*)"/.exec(html);
-  if (turnsTag === null) throw new Error('逐轮预览没渲染出来');
-  const style = turnsTag[1];
+  // 注意别写死属性顺序：浮层后来多了 id，`<div class=...` 不再紧跟标签名。
+  const tag = /<div[^>]*class="tcs-turns"[^>]*>/.exec(html);
+  const styleMatch = tag === null ? null : /style="([^"]*)"/.exec(tag[0]);
+  if (styleMatch === null) throw new Error('逐轮预览没渲染出来');
+  const style = styleMatch[1];
   if (!style.includes(`top:${ROW_RECT.top}px`) || style.includes('bottom:')) {
     throw new Error('逐轮预览没有锚定到被悬停的那一行，实际 style=' + style);
   }
