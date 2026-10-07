@@ -173,42 +173,52 @@ export function apply(ctx, config = {}) {
     if (refresh !== true && cached !== undefined && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload;
     const query = ctx.get('sessionQuery');
     if (query === undefined) throw new Error('sessionQuery unavailable');
-    // 优先 observeSession：它同时给出会话事件与投影，投影里的 turnOutline 就是平台自己的轮号
-    let lease;
-    try {
-      let events;
-      let outline;
-      if (typeof query.observeSession === 'function') {
+    if (typeof query.readSession !== 'function') throw new Error('sessionQuery.readSession unavailable');
+
+    // 事件：readSession 是已验证的形状（返回事件克隆，活跃/冷会话都覆盖）
+    const { events } = await query.readSession(sessionId);
+
+    // 平台轮号（turnOutline 投影）：只是锦上添花——拿不到就用日志编号，绝不影响轮次本身
+    let outline;
+    let probe = null;
+    if (typeof query.observeSession === 'function') {
+      let lease;
+      try {
         lease = query.observeSession(sessionId, { projectionMode: 'all' });
-        events = lease?.events ?? [];
         const projections = lease?.projections;
         outline = projections?.turnOutline ?? projections?.values?.turnOutline;
-      } else if (typeof query.readSession === 'function') {
-        ({ events } = await query.readSession(sessionId));
-      } else {
-        throw new Error('sessionQuery.observeSession unavailable');
-      }
-      const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold), outline);
-      const selected = turns.slice(Math.max(0, turns.length - limit));
-      const payload = {
-        sessionId,
-        totalTurns: turns.length,
-        truncated: selected.length < turns.length,
-        // 兼容字段：折叠器是本插件自带的，始终可用
-        folded: true,
-        // 诊断用：投影里拿到几轮（null = 没拿到，退回日志编号）
-        platformTurns: Array.isArray(outline) ? outline.length : null,
-        turns: selected,
-      };
-      cache.set(sessionId, { at: Date.now(), payload });
-      return payload;
-    } finally {
-      try {
-        lease?.[Symbol.dispose]?.();
-      } catch {
-        /* 释放失败不影响结果 */
+        // 诊断：lease 上到底有哪些键、投影里有哪些投影名（一次看清形状，别再猜）
+        probe = {
+          leaseKeys: lease !== null && typeof lease === 'object' ? Object.keys(lease).slice(0, 12) : null,
+          projectionKeys: projections !== null && typeof projections === 'object' ? Object.keys(projections).slice(0, 20) : null,
+          eventCount: Array.isArray(lease?.events) ? lease.events.length : null,
+        };
+      } catch (error) {
+        probe = { error: String(error?.message ?? error) };
+      } finally {
+        try {
+          lease?.[Symbol.dispose]?.();
+        } catch {
+          /* 释放失败不影响结果 */
+        }
       }
     }
+
+    const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold), outline);
+    const selected = turns.slice(Math.max(0, turns.length - limit));
+    const payload = {
+      sessionId,
+      totalTurns: turns.length,
+      truncated: selected.length < turns.length,
+      // 兼容字段：折叠器是本插件自带的，始终可用
+      folded: true,
+      // 诊断用：投影里拿到几轮（null = 没拿到，退回日志编号）
+      platformTurns: Array.isArray(outline) ? outline.length : null,
+      probe,
+      turns: selected,
+    };
+    cache.set(sessionId, { at: Date.now(), payload });
+    return payload;
   }
 
   ctx.inject(['webServer'], (host) => {
