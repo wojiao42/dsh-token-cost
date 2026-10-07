@@ -8,7 +8,7 @@
  *
  * 退出码：0 = 全部通过。
  */
-import { apply, foldTurns, turnsFromEvents } from '../index.js';
+import { apply, foldTurns, remapTurnNumbers, turnsFromEvents } from '../index.js';
 
 let failed = 0;
 const assert = (label, ok) => {
@@ -59,6 +59,25 @@ assertEqual('a missing turn number falls back to position',
   [1]);
 assertEqual('an empty log folds to nothing', turnsFromEvents([]), []);
 assertEqual('junk entries are skipped', turnsFromEvents([null, 42, { type: 'turn/start', time: 1, data: { turn: 9 } }]).length, 1);
+
+assertEqual('remapTurnNumbers follows the platform projection numbering',
+  remapTurnNumbers(
+    [
+      { turn: 1, summary: 'a' },
+      { turn: 2, summary: 'b' },
+    ],
+    [
+      { turn: 1, seq: 10 },
+      { turn: 0, seq: 1 },
+    ],
+  ).map((entry) => [entry.turn, entry.logTurn, entry.summary]),
+  [[0, 1, 'a'], [1, 2, 'b']]);
+assertEqual('remapTurnNumbers leaves numbers alone when the sets differ in size',
+  remapTurnNumbers([{ turn: 1 }, { turn: 2 }], [{ turn: 0 }]).map((entry) => entry.turn),
+  [1, 2]);
+assertEqual('remapTurnNumbers tolerates a missing outline',
+  remapTurnNumbers([{ turn: 1 }], undefined).map((entry) => [entry.turn, entry.logTurn]),
+  [[1, 1]]);
 
 const stubbed = foldTurns(EVENTS, (events) => ({ uncachedInputTokens: events.length }));
 assertEqual('foldTurns wires the fold to each slice', stubbed.map((turn) => turn.usage.uncachedInputTokens), [8, 3]);

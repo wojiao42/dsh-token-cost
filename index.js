@@ -22,6 +22,25 @@ const CACHE_TTL_MS = 15_000;
 
 export const name = 'token-cost';
 
+/**
+ * 把日志轮号换成平台投影（`turnOutline`）用的轮号。
+ * 轨道刻度显示/跳转都用投影编号；两边若一个是 0 基一个是 1 基，按标签点就会整体偏一轮。
+ * 两边的轮次集合大小不一致时（历史被裁剪、投影缺失）原样返回，不硬套。
+ * @param {object[]} turns 日志切出来的轮次（升序）。
+ * @param {Array<{turn: number}>|undefined} outline turnOutline 投影值。
+ * @returns {object[]} 每轮附上 `logTurn`（日志编号）与 `turn`（平台编号）。
+ */
+export function remapTurnNumbers(turns, outline) {
+  const platform = Array.isArray(outline)
+    ? outline
+        .map((entry) => (entry !== null && typeof entry === 'object' && Number.isSafeInteger(entry.turn) ? entry.turn : null))
+        .filter((turn) => turn !== null)
+        .sort((left, right) => left - right)
+    : [];
+  if (platform.length !== turns.length) return turns.map((turn) => ({ ...turn, logTurn: turn.turn }));
+  return turns.map((turn, index) => ({ ...turn, logTurn: turn.turn, turn: platform[index] }));
+}
+
 /** 从 user/message 里抽出可读文本（数组内容取 text 块），压平并截断。 */
 function promptText(data) {
   const content = data?.content;
@@ -154,21 +173,42 @@ export function apply(ctx, config = {}) {
     if (refresh !== true && cached !== undefined && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload;
     const query = ctx.get('sessionQuery');
     if (query === undefined) throw new Error('sessionQuery unavailable');
-    if (typeof query.readSession !== 'function') throw new Error('sessionQuery.readSession unavailable');
-    // readSession: 读并校验整份会话日志（活跃会话走 live，冷会话走持久化），返回克隆过的事件
-    const { events } = await query.readSession(sessionId);
-    const turns = foldTurns(events ?? [], config.fold);
-    const selected = turns.slice(Math.max(0, turns.length - limit));
-    const payload = {
-      sessionId,
-      totalTurns: turns.length,
-      truncated: selected.length < turns.length,
-      // 兼容字段：折叠器是本插件自带的，始终可用
-      folded: true,
-      turns: selected,
-    };
-    cache.set(sessionId, { at: Date.now(), payload });
-    return payload;
+    // 优先 observeSession：它同时给出会话事件与投影，投影里的 turnOutline 就是平台自己的轮号
+    let lease;
+    try {
+      let events;
+      let outline;
+      if (typeof query.observeSession === 'function') {
+        lease = query.observeSession(sessionId, { projectionMode: 'all' });
+        events = lease?.events ?? [];
+        const projections = lease?.projections;
+        outline = projections?.turnOutline ?? projections?.values?.turnOutline;
+      } else if (typeof query.readSession === 'function') {
+        ({ events } = await query.readSession(sessionId));
+      } else {
+        throw new Error('sessionQuery.observeSession unavailable');
+      }
+      const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold), outline);
+      const selected = turns.slice(Math.max(0, turns.length - limit));
+      const payload = {
+        sessionId,
+        totalTurns: turns.length,
+        truncated: selected.length < turns.length,
+        // 兼容字段：折叠器是本插件自带的，始终可用
+        folded: true,
+        // 诊断用：投影里拿到几轮（null = 没拿到，退回日志编号）
+        platformTurns: Array.isArray(outline) ? outline.length : null,
+        turns: selected,
+      };
+      cache.set(sessionId, { at: Date.now(), payload });
+      return payload;
+    } finally {
+      try {
+        lease?.[Symbol.dispose]?.();
+      } catch {
+        /* 释放失败不影响结果 */
+      }
+    }
   }
 
   ctx.inject(['webServer'], (host) => {

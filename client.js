@@ -561,9 +561,9 @@ window.__ModuleLoader__.load({
       /** 先按序号点（不受标签编号影响）；序号处标签轮号对不上再退回按标签点。 */
       const clickOnce = () => {
         if (ordinal !== null) {
+          // 序号是权威：两边都按轮次升序，序号一致即同一轮（标签编号可能 0 基/1 基不同）
           const byIndex = markByIndex(ordinal);
-          const info = byIndex === null ? null : turnNumberOf(byIndex);
-          if (byIndex !== null && info !== null && info.turn === turn) {
+          if (byIndex !== null) {
             if (typeof byIndex.click === 'function') byIndex.click();
             return true;
           }
