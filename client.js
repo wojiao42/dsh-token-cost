@@ -208,6 +208,8 @@ window.__ModuleLoader__.load({
     ].join('');
 
     const SUMMARY_PANEL_ID = 'dsh-token-cost-summary-panel';
+    /** 逐轮预览浮层的 id：它也是 portal，必须和面板一样被排除在「点外面就关闭」之外。 */
+    const TURNS_PANEL_ID = 'dsh-token-cost-turns-panel';
     /** Automatic projection warm-up cap per list update; running sessions always qualify first. */
     const WARM_LIMIT = 48;
     /** Session ids already asked for a projection baseline during this page life. */
@@ -622,6 +624,9 @@ window.__ModuleLoader__.load({
           if (root !== null && root.contains(event.target)) return;
           const panel = document.getElementById(SUMMARY_PANEL_ID);
           if (panel !== null && panel.contains(event.target)) return;
+          // 逐轮预览同样是 portal：命中它不能算「点了外面」，否则按下就把行按钮卸载了
+          const turns = document.getElementById(TURNS_PANEL_ID);
+          if (turns !== null && turns.contains(event.target)) return;
           close();
         };
         const onKeyDown = (event) => {
@@ -932,6 +937,7 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 {
+                  id: TURNS_PANEL_ID,
                   className: 'tcs-turns',
                   'data-turn-preview': preview.id,
                   onMouseEnter: cancelLeave,
