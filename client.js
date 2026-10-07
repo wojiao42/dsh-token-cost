@@ -566,10 +566,10 @@ window.__ModuleLoader__.load({
     const warmedJumpSessions = new Set();
     /** 预热后等轨道落位的时间。 */
     const JUMP_WARM_MS = 500;
-    /** 一次跳转里最多替用户翻几页"更早"（每页约 50 条消息 / 2 轮）。 */
-    const JUMP_PAGE_TRIES = 8;
+    /** 一次跳转里最多替用户翻几页"更早"（每页约 50 条消息 / 2 轮；长对话要翻很多页）。 */
+    const JUMP_PAGE_TRIES = 24;
     /** 翻一页后等它渲染的时间。 */
-    const JUMP_PAGE_MS = 350;
+    const JUMP_PAGE_MS = 250;
 
     function jumpToTurn(turn, options = {}) {
       const ordinal = Number.isInteger(options.ordinal) ? options.ordinal : null;
@@ -594,8 +594,11 @@ window.__ModuleLoader__.load({
       /** 轮询等目标刻度出现后点它；还找不到就再翻一页更早的历史。 */
       const jumpTarget = (left, pages) => {
         if (clickTarget()) return;
-        if (pages > 0) {
-          void pageOnce().then(() => setTimeout(() => jumpTarget(left, pages - 1), JUMP_PAGE_MS));
+        if (pages > 0 && !pagesExhausted) {
+          void pageOnce().then((more) => {
+            if (more === false) pagesExhausted = true;
+            setTimeout(() => jumpTarget(left, pages - 1), JUMP_PAGE_MS);
+          });
           return;
         }
         if (left <= 0) return;
@@ -604,7 +607,7 @@ window.__ModuleLoader__.load({
 
       const settleAndJump = () => {
         if (sessionId !== null) warmedJumpSessions.add(sessionId);
-        jumpTarget(JUMP_POLL_TRIES, 2);
+        jumpTarget(JUMP_POLL_TRIES, 6);
       };
 
       // 已经热过：直接点目标（还找不到就再翻页）
@@ -624,6 +627,8 @@ window.__ModuleLoader__.load({
           return Promise.resolve(false);
         }
       };
+      /** 没有更多历史了（loadOlder 报 false）就不再翻页，只等渲染。 */
+      let pagesExhausted = false;
 
       /**
        * 预热：冷轨道的刻度不全。优先点第 1 轮那颗刻度（平台的"加载并跳转"会顺带把历史翻进来）；
@@ -648,8 +653,11 @@ window.__ModuleLoader__.load({
           return;
         }
         // 还看不到第 1 轮刻度：翻一页更早的历史再试
-        if (pages > 0) {
-          void pageOnce().then(() => setTimeout(() => warmAttempt(left, pages - 1), JUMP_PAGE_MS));
+        if (pages > 0 && !pagesExhausted) {
+          void pageOnce().then((more) => {
+            if (more === false) pagesExhausted = true;
+            setTimeout(() => warmAttempt(left, pages - 1), JUMP_PAGE_MS);
+          });
           return;
         }
         if (left <= 0) {
@@ -1232,10 +1240,23 @@ window.__ModuleLoader__.load({
                 const sessions = ctx.sessions;
                 if (typeof sessions?.using !== 'function') return false;
                 try {
-                  await sessions.using(sessionId, { source: 'token-cost' }, async (reference) => {
-                    await reference?.binding?.session?.loadOlder?.();
+                  return await sessions.using(sessionId, { source: 'token-cost' }, async (reference) => {
+                    const session = reference?.binding?.session;
+                    if (session === undefined) return false;
+                    const hasMore = () => {
+                      try {
+                        const snapshot = session.getSnapshot?.();
+                        return snapshot?.hasMore;
+                      } catch {
+                        return undefined;
+                      }
+                    };
+                    // 冷会话必须先打开：没 open 的会话 loadOlder() 会直接返回、什么都不做
+                    if (typeof session.open === 'function') await session.open();
+                    if (hasMore() === false) return false;
+                    await session.loadOlder?.();
+                    return hasMore() !== false;
                   });
-                  return true;
                 } catch {
                   return false;
                 }
