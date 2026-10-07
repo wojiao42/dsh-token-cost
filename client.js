@@ -88,10 +88,6 @@ window.__ModuleLoader__.load({
       needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
       approx: '近似',
       untitledTurn: '（这一轮没有输入记录）',
-      jumpBusy: '正在跳到第 {turn} 轮…',
-      jumpOk: '已跳到第 {turn} 轮',
-      jumpWrong: '本想跳到第 {turn} 轮，轨道却落到第 {landed} 轮',
-      jumpMissing: '没找到第 {turn} 轮的刻度（聊天区可能没打开）',
       now: '刚刚',
       turns: '轮',
       steps: '步',
@@ -128,10 +124,6 @@ window.__ModuleLoader__.load({
       needRestart: 'per-turn data needs one Harness restart (host half changed)',
       approx: 'approx',
       untitledTurn: '(no prompt recorded)',
-      jumpBusy: 'Jumping to turn {turn}…',
-      jumpOk: 'Jumped to turn {turn}',
-      jumpWrong: 'Asked for turn {turn}, the rail landed on turn {landed}',
-      jumpMissing: 'No rail mark for turn {turn} (chat view may be closed)',
       now: 'just now',
       turns: ' turns',
       steps: ' steps',
@@ -517,16 +509,6 @@ window.__ModuleLoader__.load({
       return hits.map((hit) => hit.node);
     }
 
-    /** 当前轨道上被标为活动的那一轮（平台给活动刻度 aria-current="true"）。 */
-    function activeRailTurn() {
-      const rail = turnRail();
-      if (rail === null) return null;
-      for (const node of rail.querySelectorAll('button[aria-label][aria-current="true"]')) {
-        const info = turnNumberOf(node);
-        if (info !== null) return info.turn;
-      }
-      return null;
-    }
 
     /**
      * 把主视图落到某一轮。
@@ -537,71 +519,24 @@ window.__ModuleLoader__.load({
      * 会由轨道自己 loadThrough 之后再落位。刻度还没渲染出来就轮询等一会儿；
      * 一直找不到（比如会话只有一轮、或平台改了文案）就安静放弃，不报错。
      */
-    /** 等活动刻度稳定（连续若干次读到同一轮才算落定）：平滑滚动期间它是滞后的。 */
-    const JUMP_SETTLE_TRIES = 60;
-    const JUMP_SETTLE_STABLE = 4;
-
+    /**
+     * 点一次目标刻度就结束——像人自己点轨道一样，不做验证、不做二次校正。
+     * 之前加过"等落点稳定 + 按偏差校正"，但那会在平滑滚动期间多点、把落点带偏，
+     * 已回退：这里只负责把手点到正确的刻度上。
+     */
     function jumpToTurn(turn, options = {}) {
-      const report = typeof options.report === 'function' ? options.report : () => {};
-      let calibrations = 0;
-
-      /** 等落点稳定后回调最终轮号（读不到返回 null）。 */
-      const settle = (left, callback) => {
-        let last;
-        let stable = 0;
-        const step = (remaining) => {
-          const now = activeRailTurn();
-          if (now === null) {
-            if (remaining > 0) setTimeout(() => step(remaining - 1), JUMP_POLL_MS);
-            else callback(null);
-            return;
-          }
-          if (now === last) stable += 1;
-          else {
-            last = now;
-            stable = 0;
-          }
-          if (stable >= JUMP_SETTLE_STABLE || remaining <= 0) callback(last);
-          else setTimeout(() => step(remaining - 1), JUMP_POLL_MS);
-        };
-        setTimeout(() => step(left), JUMP_POLL_MS);
-      };
-
-      const attempt = (number, left) => {
-        const marks = findTurnMarks(number);
-        if (marks.length === 0) {
-          if (left > 0) {
-            setTimeout(() => attempt(number, left - 1), JUMP_POLL_MS);
-            return;
-          }
-          report({ kind: 'missing' });
+      const attempt = (left) => {
+        const marks = findTurnMarks(turn);
+        if (marks.length > 0) {
+          if (typeof marks[0].click === 'function') marks[0].click();
           return;
         }
-        if (typeof marks[0].click === 'function') marks[0].click();
-        settle(JUMP_SETTLE_TRIES, (landed) => {
-          if (landed === number) {
-            report(number === turn ? { kind: 'ok' } : { kind: 'ok', calibrated: number });
-            return;
-          }
-          if (landed === null) {
-            report({ kind: 'missing' });
-            return;
-          }
-          // 自适应校准：轨道落点与刻度号有固定偏差时，按偏差纠正一次
-          const corrected = number + (number - landed);
-          if (calibrations < 2 && corrected !== number && corrected > 0) {
-            calibrations += 1;
-            attempt(corrected, 0);
-            return;
-          }
-          report({ kind: 'wrong', landed });
-        });
+        if (left <= 0) return;
+        setTimeout(() => attempt(left - 1), JUMP_POLL_MS);
       };
-
-      const start = () => attempt(turn, JUMP_POLL_TRIES);
       const waited = options.delayMs ?? 0;
-      if (waited > 0) setTimeout(start, waited);
-      else start();
+      if (waited > 0) setTimeout(() => attempt(JUMP_POLL_TRIES), waited);
+      else attempt(JUMP_POLL_TRIES);
     }
 
     /**
@@ -780,8 +715,6 @@ window.__ModuleLoader__.load({
       });
 
       const [preview, setPreview] = React.useState(null);
-      /** 上一次点轮次的结果：成功 / 落错轮 / 找不到刻度。 */
-      const [jumpNote, setJumpNote] = React.useState(null);
       /** 被悬停那一行的视口坐标（逐轮预览要贴着它展开，不能贴在屏幕下方）。 */
       const [previewAnchor, setPreviewAnchor] = React.useState(null);
       const previewTimer = React.useRef(null);
@@ -1038,14 +971,15 @@ window.__ModuleLoader__.load({
        * 先切换再跳：轨道属于当前会话，不先切过去就找不到对应刻度。
        */
       const onJumpTurn = (sessionId) => (turnNo) => {
-        // 面板留着：跳转结果（成功/落错/找不到）要在这里说清楚
         if (typeof openSession === 'function') openSession(sessionId);
         setPinned(false);
-        setJumpNote({ kind: 'busy', turn: turnNo });
+        setOpen(false);
+        setPreview(null);
+        setPreviewAnchor(null);
+        cancelPreview();
         jumpToTurn(turnNo, {
-          // 跨会话时旧会话的刻度还在 DOM 里，先等视图换完
+          // 跨会话时旧会话的刻度还挂在 DOM 里，先等视图换完再点（否则会点到上一个会话的同号刻度）
           delayMs: sessionId === currentSessionIdOf(sessions) ? 0 : JUMP_SWITCH_MS,
-          report: (result) => setJumpNote({ ...result, turn: turnNo }),
         });
       };
 
@@ -1105,19 +1039,6 @@ window.__ModuleLoader__.load({
                 preview.state === 'ready' && preview.folded !== true
                   ? h('div', { className: 'tcs-turnsNote' }, tr('foldUnavailable'))
                   : null,
-                jumpNote === null
-                  ? null
-                  : h(
-                      'div',
-                      { className: 'tcs-turnsNote', 'data-jump-note': jumpNote.kind },
-                      jumpNote.kind === 'busy'
-                        ? tr('jumpBusy', { turn: jumpNote.turn })
-                        : jumpNote.kind === 'ok'
-                          ? tr('jumpOk', { turn: jumpNote.turn })
-                          : jumpNote.kind === 'wrong'
-                            ? tr('jumpWrong', { turn: jumpNote.turn, landed: jumpNote.landed })
-                            : tr('jumpMissing', { turn: jumpNote.turn }),
-                    ),
               ),
               document.body,
             );
