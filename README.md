@@ -1,15 +1,16 @@
 # dsh-token-cost
 
-> **English** — Live token usage and estimated cost in the DSH sidebar: every session combined, the
-> current task, and the as-of clock for those numbers; **hover** to expand a per-session breakdown with
-> time detail (elapsed, turns/steps, first-token, model vs tool time, decode speed), and **hover a
-> single row** to see that conversation's per-turn usage and cost.
+> **English** — Live token usage and estimated cost in the DSH sidebar: every session combined plus the
+> current task; **hover** to expand a per-session breakdown with time detail (elapsed, turns/steps,
+> first-token, model vs tool time, decode speed) and the as-of clock, then **hover a single row** for
+> that conversation's per-turn usage, cost and prompt summary — click a turn to jump to it.
 > Cost is estimated from an editable price table; the plugin adds no model calls, prompts or tools.
 
-侧栏底部常驻的**用量与费用账本**：全部会话合计、当前任务、以及这份账目的截至时刻。
+侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
+这份账目的**截至时刻**只在悬停展开的面板里显示。
 
 ```
-全部 ●≈¥0.1240 · 截至 23:47
+全部 ●≈¥0.1240
 当前  ≈¥0.0330 · 45.4%
 ```
 
@@ -20,9 +21,10 @@
 
 侧栏收起时降级为只显示合计金额。输入框下方**刻意不显示任何东西**——同一份合计不重复出现。
 
-**悬停某一个对话行**，右侧再弹一层该会话的**逐轮用量**：轮号、token、该轮费用、用时与开始时刻；
-某轮用量无法证明时显示 `—`。数据来自该会话的日志（Host 半侧读），折叠用的是官方
-`dsh-token-meter` 的逐轮算法——和聊天里「本轮用量」同源。
+**悬停某一个对话行**，在**那一行右侧**再弹一层该会话的**逐轮用量**：每轮一行 = 轮号 + **触发它那句话**，
+下面一行是 `用时 · 时刻 · 步数 · 工具数`；有重试标「近似」、未闭合标「进行中」、用量不可证明时显示 `—`。
+**点某一轮会切到该会话并把主视图落到那一轮**。数据来自该会话的日志（Host 半侧读），
+折叠是本插件自带的实现（按轮累加 provider 上报的用量）。
 
 ## 截图
 
@@ -54,14 +56,15 @@
 
 | 元素 | 内容 |
 |---|---|
-| 徽标第一行 | `全部 ≈¥0.12 · 截至 00:23`：全部会话的估算费用合计 + 这份账目的数据时刻（有任务在跑时金额前有一个绿点） |
+| 徽标第一行 | `全部 ≈¥0.12`：全部会话的估算费用合计（有任务在跑时金额前有一个绿点）；截至时刻不在这里 |
 | 徽标第二行 | `当前 ≈¥0.03 · 45.4%`：主视图里那个任务的费用 + 上下文占用 |
 | 徽标尺寸 | 两行、12px 行高 1.25——侧栏 footer 是单行 flex 槽位，故意压到与旁边的单行按钮同一量级 |
 | 展开方式 | **悬停**即展开（移开 0.2 秒后收起）；点击钉住 / 取消钉住；键盘 focus 同样展开 |
 | 面板头部 | 合计金额；元信息：会话数 / 运行中数 / 缓存命中率 / 最高占用 / **截至时刻 / 整体 tok/s / 平均首 token** |
 | 面板列表 | 每行两行：标题行（圆点、标题、token、费用、占用%）+ **时间行**（见下） |
 | 词条 | `运行中 12m` / `最近 3m` · `7轮 12步` · `首token 1.2s` · `模型 4m` · `工具 3m` · `23.8 tok/s` |
-| **逐轮预览** | **悬停某一行**在面板右侧弹出：`第 12 轮  74.5k  ≈¥0.0210  1m · 00:19`；未闭合轮标「进行中」，用量不可证明时那两列显示 `—`；底部提示「仅显示最近 4 / 12 轮」 |
+| **逐轮预览** | **悬停某一行**，在**那一行右侧**弹出：每轮 = `第 12 轮 + 触发它那句话`，下面一行 `用时 · 时刻 · 步数 · 工具数`；有重试标「近似」、未闭合标「进行中」、用量不可证明时显示 `—`；底部提示「仅显示最近 4 / 12 轮」 |
+| 点某一轮 | **切到该会话，并把主视图落到那一轮** |
 | 面板底部 | 「载入其余会话 · N」（仅在还有会话没取到数据时出现） |
 
 
