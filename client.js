@@ -518,13 +518,15 @@ window.__ModuleLoader__.load({
     /** 把轨道滚到第 ordinal 个刻度附近（刻度固定 10px 间距，平台自己的 scrollToIndex 也这么做）。 */
     function scrollRailToIndex(ordinal) {
       const rail = turnRail();
-      if (rail === null) return;
-      for (const node of rail.querySelectorAll('*')) {
+      if (rail === null) return false;
+      const candidates = [rail, ...rail.querySelectorAll('*')];
+      for (const node of candidates) {
         if (node.scrollHeight > node.clientHeight + 4) {
           node.scrollTop = Math.max(0, ordinal * TURN_SPACING_PX - node.clientHeight / 2);
-          return;
+          return true;
         }
       }
+      return false;
     }
 
     /** 第 turn 轮的候选刻度：可见轨道优先，loaded 文案优先。 */
@@ -566,8 +568,11 @@ window.__ModuleLoader__.load({
     const warmedJumpSessions = new Set();
     /** 预热后等轨道落位的时间。 */
     const JUMP_WARM_MS = 500;
-    /** 一次跳转里最多替用户翻几页"更早"（每页约 50 条消息 / 2 轮；长对话要翻很多页）。 */
-    const JUMP_PAGE_TRIES = 24;
+    /**
+     * 兜底翻页预算：正路是"滚轨道 + 点未加载刻度"，平台自己 loadThrough。
+     * 只有在树里根本找不到轨道时，才自己翻 2 页碰碰运气。
+     */
+    const JUMP_PAGE_TRIES = 2;
     /** 翻一页后等它渲染的时间。 */
     const JUMP_PAGE_MS = 250;
 
@@ -576,14 +581,17 @@ window.__ModuleLoader__.load({
       const sessionId = typeof options.sessionId === 'string' ? options.sessionId : null;
 
       /** 点一次目标刻度：优先按序号（两边都按轮次升序，序号一致即同一轮）。 */
+      let railScrolled = false;
       const clickTarget = () => {
         if (ordinal !== null) {
           const byIndex = markByIndex(ordinal);
           if (byIndex !== null) {
+            // 未加载的刻度文案是「加载并跳转到第 N 轮」：点它，平台自己翻页 + 落位
             if (typeof byIndex.click === 'function') byIndex.click();
             return true;
           }
-          scrollRailToIndex(ordinal);
+          // 刻度还没渲染出来：把轨道滚到那一格（虚拟化轨道只渲染可视范围内的刻度）
+          if (scrollRailToIndex(ordinal)) railScrolled = true;
         }
         const marks = findTurnMarks(turn);
         if (marks.length === 0) return false;
@@ -652,7 +660,9 @@ window.__ModuleLoader__.load({
           settleAndJump();
           return;
         }
-        // 还看不到第 1 轮刻度：翻一页更早的历史再试
+        // 看不到第 1 轮刻度：先把轨道滚回最前（让刻度渲染出来）
+        scrollRailToIndex(0);
+        // 还看不到就翻一页更早的历史再试（兜底；正路是点未加载刻度）
         if (pages > 0 && !pagesExhausted) {
           void pageOnce().then((more) => {
             if (more === false) pagesExhausted = true;
