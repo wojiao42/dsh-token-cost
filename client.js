@@ -88,6 +88,10 @@ window.__ModuleLoader__.load({
       needRestart: '逐轮数据需要重启一次 Harness（Host 半侧刚更新过）',
       approx: '近似',
       untitledTurn: '（这一轮没有输入记录）',
+      jumpBusy: '正在跳到第 {turn} 轮…',
+      jumpOk: '已跳到第 {turn} 轮',
+      jumpWrong: '本想跳到第 {turn} 轮，轨道却落到第 {landed} 轮',
+      jumpMissing: '没找到第 {turn} 轮的刻度（聊天区可能没打开）',
       now: '刚刚',
       turns: '轮',
       steps: '步',
@@ -124,6 +128,10 @@ window.__ModuleLoader__.load({
       needRestart: 'per-turn data needs one Harness restart (host half changed)',
       approx: 'approx',
       untitledTurn: '(no prompt recorded)',
+      jumpBusy: 'Jumping to turn {turn}…',
+      jumpOk: 'Jumped to turn {turn}',
+      jumpWrong: 'Asked for turn {turn}, the rail landed on turn {landed}',
+      jumpMissing: 'No rail mark for turn {turn} (chat view may be closed)',
       now: 'just now',
       turns: ' turns',
       steps: ' steps',
@@ -463,19 +471,59 @@ window.__ModuleLoader__.load({
       /^Jump to turn\s+(\d+)$/i,
       /^Load and jump to turn\s+(\d+)$/i,
     ];
-    /** 切换会话后轨道要等一帧才渲染，跳转按这个节奏轮询等待（约 5 秒上限）。 */
+    /** 轮次导航轨道的容器文案（中英都认）。 */
+    const TURN_RAIL_LABELS = ['轮次导航', 'Turn navigation'];
+    /** 刻度轮询节奏与上限（切换会话/加载历史都要时间）。 */
     const JUMP_POLL_MS = 120;
-    const JUMP_POLL_TRIES = 42;
+    const JUMP_POLL_TRIES = 60;
+    /** 跨会话跳转前先等视图换完，否则会点到上一个会话留在 DOM 里的同号刻度。 */
+    const JUMP_SWITCH_MS = 700;
 
-    /** 在聊天视图的轮次轨道里找第 turn 轮的刻度按钮；找不到返回 null。 */
-    function findTurnMark(turn) {
-      if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return null;
-      for (const node of document.querySelectorAll('button[aria-label]')) {
-        const label = String(node.getAttribute?.('aria-label') ?? '').trim();
-        for (const pattern of TURN_MARK_LABELS) {
-          const match = pattern.exec(label);
-          if (match !== null && Number(match[1]) === turn) return node;
+    /** 刻度按钮上的轮号，识别不出返回 null。 */
+    function turnNumberOf(node) {
+      const label = String(node?.getAttribute?.('aria-label') ?? '').trim();
+      for (const pattern of TURN_MARK_LABELS) {
+        const match = pattern.exec(label);
+        if (match !== null) return { turn: Number(match[1]), unloaded: /加载|Load/i.test(label) };
+      }
+      return null;
+    }
+
+    /** 轨道容器（只认可见的那个：切换会话时旧轨道可能还挂在 DOM 上但已不可见）。 */
+    function turnRail() {
+      if (typeof document === 'undefined') return null;
+      for (const label of TURN_RAIL_LABELS) {
+        for (const node of document.querySelectorAll('[aria-label="' + label + '"]')) {
+          const rect = typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : null;
+          if (rect === null || rect.width > 0 || rect.height > 0) return node;
         }
+      }
+      return null;
+    }
+
+    /** 第 turn 轮的候选刻度：可见轨道优先，loaded 文案优先。 */
+    function findTurnMarks(turn) {
+      if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return [];
+      const scope = turnRail() ?? document;
+      const hits = [];
+      for (const node of scope.querySelectorAll('button[aria-label]')) {
+        const info = turnNumberOf(node);
+        if (info === null || info.turn !== turn) continue;
+        const rect = typeof node.getBoundingClientRect === 'function' ? node.getBoundingClientRect() : null;
+        if (rect !== null && rect.width === 0 && rect.height === 0) continue;
+        hits.push({ node, unloaded: info.unloaded });
+      }
+      hits.sort((left, right) => Number(left.unloaded) - Number(right.unloaded));
+      return hits.map((hit) => hit.node);
+    }
+
+    /** 当前轨道上被标为活动的那一轮（平台给活动刻度 aria-current="true"）。 */
+    function activeRailTurn() {
+      const rail = turnRail();
+      if (rail === null) return null;
+      for (const node of rail.querySelectorAll('button[aria-label][aria-current="true"]')) {
+        const info = turnNumberOf(node);
+        if (info !== null) return info.turn;
       }
       return null;
     }
@@ -489,17 +537,52 @@ window.__ModuleLoader__.load({
      * 会由轨道自己 loadThrough 之后再落位。刻度还没渲染出来就轮询等一会儿；
      * 一直找不到（比如会话只有一轮、或平台改了文案）就安静放弃，不报错。
      */
-    function jumpToTurn(turn) {
-      const attempt = (left) => {
-        const mark = findTurnMark(turn);
-        if (mark !== null) {
-          if (typeof mark.click === 'function') mark.click();
+    function jumpToTurn(turn, options = {}) {
+      const report = typeof options.report === 'function' ? options.report : () => {};
+      let waited = options.delayMs ?? 0;
+      const attempt = (left, candidates, index) => {
+        if (candidates === null) {
+          if (turnRail() === null && left > 0) {
+            setTimeout(() => attempt(left - 1, null, 0), JUMP_POLL_MS);
+            return;
+          }
+          const found = findTurnMarks(turn);
+          if (found.length === 0) {
+            if (left <= 0) {
+              report({ kind: 'missing' });
+              return;
+            }
+            setTimeout(() => attempt(left - 1, null, 0), JUMP_POLL_MS);
+            return;
+          }
+          attempt(left, found, 0);
           return;
         }
-        if (left <= 0) return;
-        setTimeout(() => attempt(left - 1), JUMP_POLL_MS);
+        if (index >= candidates.length) {
+          const landed = activeRailTurn();
+          report(landed === null ? { kind: 'missing' } : { kind: 'wrong', landed });
+          return;
+        }
+        const mark = candidates[index];
+        if (typeof mark.click === 'function') mark.click();
+        // 点完看轨道把哪一轮标成活动：对了就收工，错了换下一个候选
+        const verify = (leftTries) => {
+          const landed = activeRailTurn();
+          if (landed === turn) {
+            report({ kind: 'ok' });
+            return;
+          }
+          if (leftTries > 0) {
+            setTimeout(() => verify(leftTries - 1), JUMP_POLL_MS);
+            return;
+          }
+          attempt(0, candidates, index + 1);
+        };
+        setTimeout(() => verify(12), JUMP_POLL_MS);
       };
-      attempt(JUMP_POLL_TRIES);
+      const start = () => attempt(JUMP_POLL_TRIES, null, 0);
+      if (waited > 0) setTimeout(start, waited);
+      else start();
     }
 
     /**
@@ -678,6 +761,8 @@ window.__ModuleLoader__.load({
       });
 
       const [preview, setPreview] = React.useState(null);
+      /** 上一次点轮次的结果：成功 / 落错轮 / 找不到刻度。 */
+      const [jumpNote, setJumpNote] = React.useState(null);
       /** 被悬停那一行的视口坐标（逐轮预览要贴着它展开，不能贴在屏幕下方）。 */
       const [previewAnchor, setPreviewAnchor] = React.useState(null);
       const previewTimer = React.useRef(null);
@@ -934,13 +1019,15 @@ window.__ModuleLoader__.load({
        * 先切换再跳：轨道属于当前会话，不先切过去就找不到对应刻度。
        */
       const onJumpTurn = (sessionId) => (turnNo) => {
+        // 面板留着：跳转结果（成功/落错/找不到）要在这里说清楚
         if (typeof openSession === 'function') openSession(sessionId);
         setPinned(false);
-        setOpen(false);
-        setPreview(null);
-        setPreviewAnchor(null);
-        cancelPreview();
-        jumpToTurn(turnNo);
+        setJumpNote({ kind: 'busy', turn: turnNo });
+        jumpToTurn(turnNo, {
+          // 跨会话时旧会话的刻度还在 DOM 里，先等视图换完
+          delayMs: sessionId === currentSessionIdOf(sessions) ? 0 : JUMP_SWITCH_MS,
+          report: (result) => setJumpNote({ ...result, turn: turnNo }),
+        });
       };
 
       const turnsPanel =
@@ -999,6 +1086,19 @@ window.__ModuleLoader__.load({
                 preview.state === 'ready' && preview.folded !== true
                   ? h('div', { className: 'tcs-turnsNote' }, tr('foldUnavailable'))
                   : null,
+                jumpNote === null
+                  ? null
+                  : h(
+                      'div',
+                      { className: 'tcs-turnsNote', 'data-jump-note': jumpNote.kind },
+                      jumpNote.kind === 'busy'
+                        ? tr('jumpBusy', { turn: jumpNote.turn })
+                        : jumpNote.kind === 'ok'
+                          ? tr('jumpOk', { turn: jumpNote.turn })
+                          : jumpNote.kind === 'wrong'
+                            ? tr('jumpWrong', { turn: jumpNote.turn, landed: jumpNote.landed })
+                            : tr('jumpMissing', { turn: jumpNote.turn }),
+                    ),
               ),
               document.body,
             );
