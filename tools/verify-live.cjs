@@ -21,7 +21,10 @@ const count = (text, needle) => text.split(needle).length - 1;
 
 const PRESENT = {
   '侧栏汇总槽': "name: 'sidebar.footer.action'",
-  '两行徽标（全部 + 当前）': 'currentSessionIdOf',
+  '徽标（全部 / 当前 / 截至）': 'currentSessionIdOf',
+  '时间：截至时钟': 'fmtClock',
+  '时间：行明细（运行时长/轮步/ttft/速度）': 'rowDetail',
+  '悬停展开 + 点击钉住': 'onMouseEnter',
   '面板标记当前任务行': "'data-current'",
   '冷会话取证 warmProjections': 'warmProjections',
   '会话列表源 useSyncExternalStore': 'useSyncExternalStore',

@@ -112,15 +112,28 @@ const usage = (miss, cacheRead, output, cacheWrite = 0) => ({
   cacheWriteTokens: cacheWrite,
   outputTokens: output,
 });
+const NOW = Date.now();
+const stats = ({ turns, steps, llmMs, toolMs = 0, ttftMs, ttftSteps, decodeMs, decodeTokens }) => ({
+  turns,
+  steps,
+  llmMs,
+  toolMs,
+  ttftMs,
+  ttftSteps,
+  decodeMs,
+  decodeTokens,
+});
 const PROJECTIONS = {
   a: {
     tokenUsage: usage(1000, 9000, 500),
     contextPressure: { projectedTokens: 64000, contextWindow: 128000 },
     modelSelection: { next: { model: 'deepseek-flash' } },
+    sessionStats: stats({ turns: 7, steps: 12, llmMs: 90_000, toolMs: 30_000, ttftMs: 6_000, ttftSteps: 5, decodeMs: 60_000, decodeTokens: 1_200 }),
   },
   b: {
     tokenUsage: usage(0, 0, 1000),
     modelSelection: { lastUsed: { model: 'deepseek-v4-pro' } },
+    sessionStats: stats({ turns: 3, steps: 5, llmMs: 40_000, ttftMs: 2_000, ttftSteps: 2, decodeMs: 20_000, decodeTokens: 300 }),
   },
   c: {
     tokenUsage: usage(2000, 0, 0),
@@ -131,9 +144,9 @@ const PROJECTIONS = {
 const SESSIONS = {
   ids: ['a', 'b', 'c'],
   byId: {
-    a: { id: 'a', displayTitle: '主任务', running: true, retainedBy: { mainView: 1 }, projectionValues: PROJECTIONS.a },
-    b: { id: 'b', displayTitle: '旧会话', running: false, retainedBy: {}, projectionValues: PROJECTIONS.b },
-    c: { id: 'c', displayTitle: '并行任务', running: true, retainedBy: {}, projectionValues: PROJECTIONS.c },
+    a: { id: 'a', displayTitle: '主任务', running: true, retainedBy: { mainView: 1 }, updatedAt: NOW - 5_000, projectionValues: PROJECTIONS.a },
+    b: { id: 'b', displayTitle: '旧会话', running: false, retainedBy: {}, updatedAt: NOW - 180_000, projectionValues: PROJECTIONS.b },
+    c: { id: 'c', displayTitle: '并行任务', running: true, retainedBy: {}, updatedAt: NOW - 1_000, projectionValues: PROJECTIONS.c },
   },
   projectionsBySession: {
     a: { values: PROJECTIONS.a },
@@ -182,9 +195,10 @@ const badge = registration.component({ useSessions, t, openSession: (id) => open
 const badgeNodes = collect(badge);
 const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').map((entry) => entry.text);
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('badge shows the total and the current task side by side',
-  [badgeKeys, badgeValues],
-  [['全部', '当前'], ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']]);
+assertEqual('badge shows the total, the current task and the as-of clock',
+  [badgeKeys, badgeValues.slice(0, 2)],
+  [['全部', '当前', '截至'], ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']]);
+assert('as-of line is a local clock', /^\d{2}:\d{2}$/.test(badgeValues[2] ?? ''));
 assert('badge uses summary icon', badgeNodes.some((entry) => entry.node.type === 'svg'));
 assert('no portal while collapsed', portals.length === 0);
 
@@ -204,7 +218,10 @@ assert('panel is portalled to document.body', portals.length === 1 && portals[0]
 assert('panel head shows estimate', byClass('tcs-headValue')[0].text === '≈¥0.00658');
 const meta = byClass('tcs-meta')[0].node.children.filter((child) => child !== null).map((child) => child.children.join(''));
 const rows = byClass('tcs-row');
-assertEqual('meta line reports sessions/running/cache/occupancy', meta, ['4 会话', '2 运行中', '缓存命中率 75.0%', '≤50.0%']);
+assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '≤50.0%']);
+assertEqual('meta line adds as-of / decode rate / ttft',
+  meta.slice(4).map((line) => line.replace(/\d{2}:\d{2}/, 'HH:MM')),
+  ['截至 HH:MM', '18.8 tok/s', '首token 1.1s']);
 assertEqual('four session rows', rows.length, 4);
 const currentRow = rows.find((entry) => entry.node.props['data-current'] === 'true');
 assert('panel marks the current task row', currentRow !== undefined && currentRow.node.props.title.startsWith('主任务'));
@@ -214,6 +231,11 @@ assertEqual('rows sorted running-first then by cost',
 assert('row shows tokens and money', collect(rows[0].node).find((entry) => entry.className === 'tcs-tokens').text === '10.5k' &&
   collect(rows[0].node).find((entry) => entry.className === 'tcs-money').text === '≈¥0.00258');
 assert('running row shows occupancy', collect(rows[0].node).find((entry) => entry.className === 'tcs-percent').text === '50.0%');
+const detailOf = (entry) => collect(entry.node).find((node) => node.className === 'tcs-detail')?.text ?? '';
+assert('running row carries elapsed time, turns/steps, ttft, llm/tool time and decode speed',
+  /^运行中 \d+s · 7轮 12步 · 首token 1\.2s · 模型 1m · 工具 30s · 20\.0 tok\/s$/.test(detailOf(rows[0])));
+assert('idle row carries relative activity time', detailOf(rows[2]) === '最近 3m · 3轮 5步 · 首token 1.0s · 模型 40s · 15.0 tok/s');
+assert('row without sessionStats still shows activity only', /^运行中 \d+s$/.test(detailOf(rows[1])));
 assert('unpriced row shows dash', collect(rows[1].node).find((entry) => entry.className === 'tcs-money').text === '—');
 assert('idle row keeps its cost', collect(rows[2].node).find((entry) => entry.className === 'tcs-money').text === '≈¥0.00400');
 assert('unpriced hint rendered', nodes.some((entry) => entry.className === 'tcs-hint' && entry.text === ZH.unpriced));
@@ -268,6 +290,17 @@ assert('missing useSessions degrades to nothing', noHook === null || noHook === 
 const fakeSource = { getSnapshot: () => SESSIONS, subscribe: () => () => {} };
 const viaSource = registration.component({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
 const viaSourceValues = collect(viaSource).filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('reads the session list from the injected source', viaSourceValues, ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']);
+assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.00658 · 2 运行中', '≈¥0.00258 · 50.0%']);
+
+// --- 悬停展开（点击 = 钉住）
+globalThis.__FORCE_OPEN__ = false;
+const hoverBadge = registration.component({ useSessions, t, wide: true, warmProjections });
+const hoverPill = collect(hoverBadge).find((entry) => entry.className === 'tcs-pill');
+assert('badge exposes hover handlers',
+  typeof hoverPill?.node.props.onMouseEnter === 'function' && typeof hoverPill?.node.props.onMouseLeave === 'function');
+setters = [];
+hoverPill.node.props.onMouseEnter();
+assert('hovering the badge opens the panel', setters.includes(true));
+assert('badge reports pin state', hoverPill.node.props['data-pinned'] === 'false');
 
 console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.00658');

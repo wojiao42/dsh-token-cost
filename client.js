@@ -73,6 +73,14 @@ window.__ModuleLoader__.load({
       tokens: 'token',
       total: '全部',
       current: '当前',
+      asOf: '截至',
+      ago: '最近',
+      now: '刚刚',
+      turns: '轮',
+      steps: '步',
+      ttft: '首token',
+      llm: '模型',
+      tool: '工具',
       cacheRate: '缓存命中率',
       hint: '点一行切换到该会话；费用按内置单价估算。',
       unpriced: '部分会话的模型没有内置单价，其 token 未计入费用。',
@@ -88,6 +96,14 @@ window.__ModuleLoader__.load({
       tokens: 'tokens',
       total: 'All',
       current: 'Now',
+      asOf: 'as of',
+      ago: 'last',
+      now: 'just now',
+      turns: ' turns',
+      steps: ' steps',
+      ttft: 'ttft',
+      llm: 'llm',
+      tool: 'tools',
       cacheRate: 'Cache hit',
       hint: 'Click a row to switch to that session; cost is estimated.',
       unpriced: 'Some sessions use a model without a built-in price.',
@@ -109,7 +125,7 @@ window.__ModuleLoader__.load({
       '.tcs-value{min-width:0;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}',
       '.tcs-row[data-current="true"] .tcs-title{font-weight:600}',
       '.tcs-label{min-width:0;overflow:hidden;text-overflow:ellipsis}',
-      '.tcs-panel{position:fixed;z-index:80;box-sizing:border-box;width:328px;max-height:min(60vh,420px);overflow:auto;',
+      '.tcs-panel{position:fixed;z-index:80;box-sizing:border-box;width:364px;max-height:min(70vh,520px);overflow:auto;',
       'padding:10px 12px 8px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg,16px);',
       'background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));',
       'box-shadow:var(--dsw-elevation-panel,0 6px 24px rgba(0,0,0,.18));color:var(--dsw-alias-label-primary);',
@@ -121,6 +137,9 @@ window.__ModuleLoader__.load({
       '.tcs-list{display:flex;flex-direction:column;gap:1px;padding:4px 0}',
       '.tcs-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto auto 44px;align-items:center;gap:8px;width:100%;',
       'padding:4px;border:none;border-radius:var(--dsw-radius-sm,8px);background:0 0;font:inherit;color:inherit;text-align:left;cursor:pointer}',
+      '.tcs-main{display:flex;flex-direction:column;gap:1px;min-width:0}',
+      '.tcs-detail{min-width:0;white-space:normal;line-height:1.35;',
+      'color:var(--dsw-alias-label-caption,var(--dsw-alias-label-tertiary));font-size:calc(var(--dsh-content-font-size-secondary,13px) - 2px)}',
       '.tcs-row:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.tcs-dot{width:8px;height:8px;border-radius:999px;background:var(--dsw-alias-border-l2)}',
       '.tcs-dot[data-running="true"]{background:var(--dsw-alias-state-success-primary,var(--dsw-static-green-500,#22c55e))}',
@@ -143,6 +162,51 @@ window.__ModuleLoader__.load({
     const warmedSessionIds = new Set();
 
     /** Token buckets, model-priced cost and context occupancy of one session's projections. */
+    const pad2 = (value) => String(value).padStart(2, '0');
+    /** 本地时钟 HH:MM。 */
+    const fmtClock = (ms) => {
+      const date = new Date(asNumber(ms));
+      return pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+    };
+    /** 相对时间：刚刚 / 3m / 2h / 4d。 */
+    const fmtAgo = (ms, now, justNow) => {
+      const delta = asNumber(now) - asNumber(ms);
+      if (!(delta >= 60_000)) return justNow;
+      if (delta < 3_600_000) return Math.floor(delta / 60_000) + 'm';
+      if (delta < 86_400_000) return Math.floor(delta / 3_600_000) + 'h';
+      return Math.floor(delta / 86_400_000) + 'd';
+    };
+    /** 时长：42s / 12m / 1h05m。 */
+    const fmtDuration = (ms) => {
+      const seconds = Math.floor(Math.max(0, asNumber(ms)) / 1000);
+      if (seconds < 60) return seconds + 's';
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return minutes + 'm';
+      return Math.floor(minutes / 60) + 'h' + pad2(minutes % 60) + 'm';
+    };
+    /** 毫秒：820ms / 1.2s。 */
+    const fmtMs = (ms) => {
+      const value = Math.max(0, asNumber(ms));
+      return value < 1000 ? Math.round(value) + 'ms' : (value / 1000).toFixed(1) + 's';
+    };
+    /** 解码速度（token/s）。 */
+    const tokensPerSecond = (tokens, ms) => (asNumber(ms) > 0 ? asNumber(tokens) / (asNumber(ms) / 1000) : null);
+
+    /** sessionId → 首次观察到「运行中」的本地时刻（近似运行起点，供逐秒刷新显示时长）。 */
+    const runningSince = new Map();
+    function trackRunning(rows, now) {
+      const ids = new Set();
+      for (const row of rows) {
+        ids.add(row.id);
+        if (row.running) {
+          if (!runningSince.has(row.id)) runningSince.set(row.id, now);
+        } else {
+          runningSince.delete(row.id);
+        }
+      }
+      for (const id of [...runningSince.keys()]) if (!ids.has(id)) runningSince.delete(id);
+    }
+
     function sessionUsageOf(values) {
       const usage = values?.tokenUsage;
       const miss = asNumber(usage?.uncachedInputTokens);
@@ -162,6 +226,20 @@ window.__ModuleLoader__.load({
         cost: costOf(usage ?? EMPTY, price),
         percent: contextWindow > 0 && used > 0 ? (used / contextWindow) * 100 : null,
         hasUsage: values?.tokenUsage !== undefined,
+        stats: (() => {
+          const stats = values?.sessionStats;
+          if (stats === undefined) return null;
+          return {
+            turns: asNumber(stats.turns),
+            steps: asNumber(stats.steps),
+            llmMs: asNumber(stats.llmMs),
+            toolMs: asNumber(stats.toolMs),
+            ttftMs: asNumber(stats.ttftMs),
+            ttftSteps: asNumber(stats.ttftSteps),
+            decodeMs: asNumber(stats.decodeMs),
+            decodeTokens: asNumber(stats.decodeTokens),
+          };
+        })(),
       };
     }
 
@@ -179,6 +257,7 @@ window.__ModuleLoader__.load({
           title: row?.displayTitle ?? row?.title ?? id,
           running: row?.running === true,
           origin: row?.origin,
+          updatedAt: asNumber(row?.updatedAt),
           ...sessionUsageOf(values),
         });
       };
@@ -214,9 +293,18 @@ window.__ModuleLoader__.load({
           }
           if (row.billed > 0) acc.active += 1;
           if (!row.hasUsage) acc.pending += 1;
+          if (row.hasUsage) acc.asOf = Math.max(acc.asOf, row.updatedAt);
+          if (row.stats !== null) {
+            acc.decodeMs += row.stats.decodeMs;
+            acc.decodeTokens += row.stats.decodeTokens;
+            acc.ttftMs += row.stats.ttftMs;
+            acc.ttftSteps += row.stats.ttftSteps;
+            acc.llmMs += row.stats.llmMs;
+            acc.toolMs += row.stats.toolMs;
+          }
           return acc;
         },
-        { billed: 0, miss: 0, cache: 0, output: 0, cost: 0, priced: 0, unpriced: 0, running: 0, active: 0, maxPercent: 0, pending: 0 },
+        { billed: 0, miss: 0, cache: 0, output: 0, cost: 0, priced: 0, unpriced: 0, running: 0, active: 0, maxPercent: 0, pending: 0, asOf: 0, decodeMs: 0, decodeTokens: 0, ttftMs: 0, ttftSteps: 0, llmMs: 0, toolMs: 0 },
       );
       return {
         rows,
@@ -224,6 +312,8 @@ window.__ModuleLoader__.load({
           ...totals,
           sessions: rows.length,
           cacheRate: totals.miss + totals.cache > 0 ? (totals.cache / (totals.miss + totals.cache)) * 100 : null,
+          decodeRate: tokensPerSecond(totals.decodeTokens, totals.decodeMs),
+          avgTtft: totals.ttftSteps > 0 ? totals.ttftMs / totals.ttftSteps : null,
         },
       };
     }
@@ -243,7 +333,27 @@ window.__ModuleLoader__.load({
       return undefined;
     }
 
-    function summaryRow(row, tr, onOpen, currentId) {
+    /** 一行的时间明细：运行时长或最近活动、轮/步、首 token、模型耗时、工具耗时、解码速度。 */
+    function rowDetail(row, tr, now) {
+      const stats = row.stats;
+      const since = runningSince.get(row.id);
+      const activity = row.running
+        ? tr('running') + (since === undefined ? '' : ' ' + fmtDuration(now - since))
+        : tr('ago') + ' ' + fmtAgo(row.updatedAt, now, tr('now'));
+      const rate = stats === null ? null : tokensPerSecond(stats.decodeTokens, stats.decodeMs);
+      return [
+        activity,
+        stats === null || stats.steps === 0 ? null : stats.turns + tr('turns') + ' ' + stats.steps + tr('steps'),
+        stats === null || stats.ttftSteps === 0 ? null : tr('ttft') + ' ' + fmtMs(stats.ttftMs / stats.ttftSteps),
+        stats === null || stats.llmMs === 0 ? null : tr('llm') + ' ' + fmtDuration(stats.llmMs),
+        stats === null || stats.toolMs === 0 ? null : tr('tool') + ' ' + fmtDuration(stats.toolMs),
+        rate === null ? null : rate.toFixed(1) + ' tok/s',
+      ]
+        .filter((part) => part !== null)
+        .join(' · ');
+    }
+
+    function summaryRow(row, tr, onOpen, currentId, now) {
       const props = {
         key: row.id,
         type: 'button',
@@ -257,7 +367,12 @@ window.__ModuleLoader__.load({
         'button',
         props,
         h('span', { className: 'tcs-dot', 'data-running': row.running ? 'true' : 'false' }),
-        h('span', { className: 'tcs-title' }, row.title),
+        h(
+          'span',
+          { className: 'tcs-main' },
+          h('span', { className: 'tcs-title' }, row.title),
+          h('span', { className: 'tcs-detail' }, rowDetail(row, tr, now)),
+        ),
         h('span', { className: 'tcs-tokens' }, fmtCompact(row.billed)),
         h('span', { className: 'tcs-money' }, row.cost === null ? '—' : '≈' + fmtMoney(row.cost.total)),
         h('span', { className: 'tcs-percent' }, row.percent === null ? '' : fmtPercent(row.percent)),
@@ -322,7 +437,10 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (!open) return undefined;
-        const close = () => setOpen(false);
+        const close = () => {
+          setOpen(false);
+          setPinned(false);
+        };
         const onPointerDown = (event) => {
           const root = rootRef.current;
           if (root !== null && root.contains(event.target)) return;
@@ -342,6 +460,28 @@ window.__ModuleLoader__.load({
           window.removeEventListener('resize', close);
         };
       }, [open]);
+
+      const [pinned, setPinned] = React.useState(false);
+      const [, setTick] = React.useState(0);
+      const pinnedRef = React.useRef(pinned);
+      pinnedRef.current = pinned;
+      const leaveTimer = React.useRef(null);
+      const cancelLeave = () => {
+        if (leaveTimer.current !== null) {
+          clearTimeout(leaveTimer.current);
+          leaveTimer.current = null;
+        }
+      };
+      React.useEffect(() => () => cancelLeave(), []);
+      // 面板打开时按秒重渲染，让「运行中 12m」自己走
+      React.useEffect(() => {
+        if (!open) return undefined;
+        const id = setInterval(() => setTick((value) => value + 1), 1000);
+        return () => clearInterval(id);
+      }, [open]);
+      React.useEffect(() => {
+        trackRunning(summary.rows, Date.now());
+      });
 
       const totals = summary.totals;
       if (totals.billed === 0 && totals.active === 0) return null;
@@ -366,20 +506,21 @@ window.__ModuleLoader__.load({
           h('span', { className: 'tcs-key' }, tr(key)),
           h('span', { className: 'tcs-value' }, text),
         );
+      const now = Date.now();
+      const asOfLine = totals.asOf > 0 ? fmtClock(totals.asOf) : null;
       const label = wide
         ? h(
             'span',
             { className: 'tcs-lines' },
             badgeLine('total', totalLine, 'total'),
             currentLine === null ? null : badgeLine('current', currentLine, 'current'),
+            asOfLine === null ? null : badgeLine('asOf', asOfLine, 'asOf'),
           )
         : h('span', { className: 'tcs-label' }, money ?? fmtCompact(totals.billed));
 
-      const toggle = () => {
-        if (open) {
-          setOpen(false);
-          return;
-        }
+      /** 展开面板：定位到徽标上方，并重试仍缺数据的会话。 */
+      const openPanel = () => {
+        cancelLeave();
         const node = rootRef.current;
         if (node !== null) {
           const rect = node.getBoundingClientRect();
@@ -390,6 +531,27 @@ window.__ModuleLoader__.load({
         }
         for (const row of summary.rows) if (!row.hasUsage) warmedSessionIds.delete(row.id);
         setOpen(true);
+      };
+
+      /** 指针离开后延迟收起，留出移动到面板上的时间。 */
+      const scheduleLeave = () => {
+        if (pinnedRef.current) return;
+        cancelLeave();
+        leaveTimer.current = setTimeout(() => {
+          leaveTimer.current = null;
+          setOpen(false);
+        }, 220);
+      };
+
+      /** 点击 = 钉住 / 取消钉住（悬停本身就会展开）。 */
+      const togglePin = () => {
+        if (pinnedRef.current) {
+          setPinned(false);
+          setOpen(false);
+          return;
+        }
+        setPinned(true);
+        openPanel();
       };
 
       const onOpen = typeof openSession === 'function'
@@ -409,6 +571,8 @@ window.__ModuleLoader__.load({
                 className: 'tcs-panel',
                 role: 'dialog',
                 'aria-label': tr('title'),
+                onMouseEnter: cancelLeave,
+                onMouseLeave: scheduleLeave,
                 style: position === null
                   ? { left: 12, bottom: 64 }
                   : { left: position.left, bottom: position.bottom },
@@ -426,13 +590,16 @@ window.__ModuleLoader__.load({
                 h('span', null, totals.running + ' ' + tr('running')),
                 totals.cacheRate === null ? null : h('span', null, tr('cacheRate') + ' ' + fmtPercent(totals.cacheRate)),
                 totals.maxPercent > 0 ? h('span', null, '≤' + fmtPercent(totals.maxPercent)) : null,
+                totals.asOf > 0 ? h('span', null, tr('asOf') + ' ' + fmtClock(totals.asOf)) : null,
+                totals.decodeRate === null ? null : h('span', null, totals.decodeRate.toFixed(1) + ' tok/s'),
+                totals.avgTtft === null ? null : h('span', null, tr('ttft') + ' ' + fmtMs(totals.avgTtft)),
               ),
               h(
                 'div',
                 { className: 'tcs-list' },
                 visible.length === 0
                   ? h('div', { className: 'tcs-empty' }, tr('empty'))
-                  : visible.map((row) => summaryRow(row, tr, onOpen, currentId)),
+                  : visible.map((row) => summaryRow(row, tr, onOpen, currentId, now)),
               ),
               h('div', { className: 'tcs-hint' }, tr('hint')),
               totals.unpriced > 0 ? h('div', { className: 'tcs-hint' }, tr('unpriced')) : null,
@@ -468,8 +635,13 @@ window.__ModuleLoader__.load({
             type: 'button',
             className: 'tcs-pill',
             'aria-expanded': open,
+            'data-pinned': pinned ? 'true' : 'false',
             title: tr('label'),
-            onClick: toggle,
+            onMouseEnter: openPanel,
+            onMouseLeave: scheduleLeave,
+            onFocus: openPanel,
+            onBlur: scheduleLeave,
+            onClick: togglePin,
           },
           summaryIcon(),
           label,

@@ -147,18 +147,46 @@ const usage = (miss, cacheRead, output) => ({
   cacheWriteTokens: 0,
   outputTokens: output,
 });
-const projections = (miss, cacheRead, output, model, window, used) => ({
+const projections = (miss, cacheRead, output, model, window, used, stats) => ({
   tokenUsage: usage(miss, cacheRead, output),
   contextPressure: { projectedTokens: used, contextWindow: window },
   modelSelection: { next: { model } },
+  ...(stats === undefined ? {} : { sessionStats: stats }),
 });
+const stats = ({ turns, steps, llmMs, toolMs = 0, ttftMs, ttftSteps, decodeMs, decodeTokens }) => ({
+  turns,
+  steps,
+  llmMs,
+  toolMs,
+  ttftMs,
+  ttftSteps,
+  decodeMs,
+  decodeTokens,
+});
+const ago = (minutes) => Date.now() - minutes * 60_000;
 const SESSIONS = {
   ids: ['s1', 's2', 's3', 's4'],
   byId: {
-    s1: { id: 's1', displayTitle: '给侧栏加用量徽标', running: true, retainedBy: { mainView: 1 }, projectionValues: projections(42_000, 120_000, 18_000, 'deepseek-flash', 128_000, 79_000) },
-    s2: { id: 's2', displayTitle: '并发：三份文档校对', running: true, retainedBy: {}, projectionValues: projections(88_000, 260_000, 41_000, 'deepseek-flash', 128_000, 101_000) },
-    s3: { id: 's3', displayTitle: '重构登录模块', running: false, retainedBy: {}, projectionValues: projections(31_000, 90_000, 26_000, 'deepseek-v4-pro', 128_000, 33_000) },
-    s4: { id: 's4', displayTitle: '调研：缓存方案', running: false, retainedBy: {}, projectionValues: projections(12_000, 0, 9_000, 'local-model', 128_000, 14_000) },
+    s1: {
+      id: 's1', displayTitle: '给侧栏加用量徽标', running: true, retainedBy: { mainView: 1 }, updatedAt: ago(0),
+      projectionValues: projections(42_000, 120_000, 18_000, 'deepseek-flash', 128_000, 79_000,
+        stats({ turns: 9, steps: 17, llmMs: 168_000, toolMs: 94_000, ttftMs: 7_200, ttftSteps: 8, decodeMs: 96_000, decodeTokens: 2_100 })),
+    },
+    s2: {
+      id: 's2', displayTitle: '并发：三份文档校对', running: true, retainedBy: {}, updatedAt: ago(1),
+      projectionValues: projections(88_000, 260_000, 41_000, 'deepseek-flash', 128_000, 101_000,
+        stats({ turns: 14, steps: 26, llmMs: 254_000, toolMs: 181_000, ttftMs: 11_000, ttftSteps: 13, decodeMs: 143_000, decodeTokens: 3_400 })),
+    },
+    s3: {
+      id: 's3', displayTitle: '重构登录模块', running: false, retainedBy: {}, updatedAt: ago(46),
+      projectionValues: projections(31_000, 90_000, 26_000, 'deepseek-v4-pro', 128_000, 33_000,
+        stats({ turns: 6, steps: 11, llmMs: 132_000, toolMs: 58_000, ttftMs: 8_400, ttftSteps: 6, decodeMs: 61_000, decodeTokens: 1_050 })),
+    },
+    s4: {
+      id: 's4', displayTitle: '调研：缓存方案', running: false, retainedBy: {}, updatedAt: ago(320),
+      projectionValues: projections(12_000, 0, 9_000, 'local-model', 128_000, 14_000,
+        stats({ turns: 3, steps: 5, llmMs: 44_000, toolMs: 12_000, ttftMs: 3_100, ttftSteps: 3, decodeMs: 19_000, decodeTokens: 380 })),
+    },
   },
   projectionsBySession: {},
   phase: 'ready',
@@ -178,6 +206,14 @@ const ZH = {
   unpriced: '部分会话的模型没有内置单价，其 token 未计入费用。',
   empty: '暂无用量',
   loadRest: '载入其余会话',
+  asOf: '截至',
+  ago: '最近',
+  now: '刚刚',
+  turns: '轮',
+  steps: '步',
+  ttft: '首token',
+  llm: '模型',
+  tool: '工具',
 };
 
 // `renderWithOpen(open)`：`open=true` 时让组件第一个 useState 返回 true（面板展开态）
@@ -263,9 +299,9 @@ function shoot(browser, html, outFile, size) {
 
 const browser = findBrowser();
 const shots = [
-  ['screenshot-1-badge.png', page(renderWithOpen(false), { dark: false }), '360,170'],
-  ['screenshot-2-panel.png', page(renderWithOpen(true), { dark: false }), '520,430'],
-  ['screenshot-3-dark.png', page(renderWithOpen(true), { dark: true }), '520,430'],
+  ['screenshot-1-badge.png', page(renderWithOpen(false), { dark: false }), '380,200'],
+  ['screenshot-2-panel.png', page(renderWithOpen(true), { dark: false }), '560,640'],
+  ['screenshot-3-dark.png', page(renderWithOpen(true), { dark: true }), '560,640'],
 ];
 console.log('浏览器:', browser);
 console.log('主题 CSS:', themeCss === '' ? '(缺失，用兜底变量)' : `${(themeCss.length / 1024).toFixed(1)} KB`);
