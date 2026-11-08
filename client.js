@@ -221,10 +221,11 @@ window.__ModuleLoader__.load({
       llm: '模型',
       tool: '工具',
       cacheRate: '缓存命中率',
-      maxShare: '最大占比',
+      maxShare: '最大上下文',
       badgeBalance: '余额',
       badgeTotal: '累计',
       badgeCurrent: '本会话',
+      context: '上下文',
       hint: '点一行切换到该会话；费用按内置单价估算。',
       unpriced: '部分会话的模型没有内置单价，其 token 未计入费用。',
       empty: '暂无用量',
@@ -290,10 +291,11 @@ window.__ModuleLoader__.load({
       llm: 'llm',
       tool: 'tools',
       cacheRate: 'Cache hit',
-      maxShare: 'Max share',
+      maxShare: 'Max context',
       badgeBalance: 'Balance',
       badgeTotal: 'Total',
       badgeCurrent: 'Session',
+      context: 'ctx',
       hint: 'Click a row to switch to that session; cost is estimated.',
       unpriced: 'Some sessions use a model without a built-in price.',
       empty: 'No usage yet',
@@ -1261,13 +1263,13 @@ window.__ModuleLoader__.load({
       const current = currentId === undefined ? undefined : summary.rows.find((row) => row.id === currentId);
       // 徽标只留金额：截至时刻放到悬停展开的面板元信息里（见 totals.asOf 那一行）
       const totalLine = money ?? fmtCompact(totals.billed) + ' ' + tr('tokens');
+      // 本会话只显示花费（/ token），不显示上下文占用百分比
       const currentLine =
         current === undefined
           ? null
-          : (current.cost !== null && current.cost.total > 0
-              ? '≈' + fmtMoney(current.cost.total)
-              : fmtCompact(current.billed) + ' ' + tr('tokens')) +
-            (current.percent === null ? '' : ' · ' + fmtPercent(current.percent));
+          : current.cost !== null && current.cost.total > 0
+            ? '≈' + fmtMoney(current.cost.total)
+            : fmtCompact(current.billed) + ' ' + tr('tokens');
       const badgeLine = (key, text, lineKey, running) =>
         h(
           'span',

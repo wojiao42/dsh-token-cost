@@ -210,7 +210,7 @@ const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').ma
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
 assertEqual('badge shows compact lines: total, then the current task',
   [badgeKeys, badgeValues.map(clockless)],
-  [['累计', '本会话'], ['≈¥0.0167', '≈¥0.00318 · 50.0%']]);
+  [['累计', '本会话'], ['≈¥0.0167', '≈¥0.00318']]);
 assert('the badge no longer carries the as-of clock', !/截至/.test(badgeValues.join(' ')));
 assert('a running session shows as a dot on the total line',
   collect(badge).some((entry) => entry.className === 'tcs-dot' && entry.node.props['data-running'] === 'true'));
@@ -233,7 +233,7 @@ assert('panel is portalled to document.body', portals.length === 1 && portals[0]
 assert('panel head shows estimate', byClass('tcs-headValue')[0].text === '≈¥0.0167');
 const meta = byClass('tcs-meta')[0].node.children.filter((child) => child !== null).map((child) => child.children.join(''));
 const rows = byClass('tcs-row');
-assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '最大占比 ≤50.0%']);
+assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '最大上下文 ≤50.0%']);
 assert('the as-of clock lives in the panel meta line', meta.some((line) => /截至 \d{2}:\d{2}/.test(line)));
 assertEqual('meta line adds as-of / decode rate / ttft',
   meta.slice(4).map((line) => line.replace(/\d{2}:\d{2}/, 'HH:MM')),
@@ -306,7 +306,7 @@ assert('missing useSessions degrades to nothing', noHook === null || noHook === 
 const fakeSource = { getSnapshot: () => SESSIONS, subscribe: () => () => {} };
 const viaSource = render({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
 const viaSourceValues = collect(viaSource).filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.0167', '≈¥0.00318 · 50.0%']);
+assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.0167', '≈¥0.00318']);
 
 // --- 悬停展开（点击 = 钉住）
 globalThis.__FORCE_OPEN__ = false;
