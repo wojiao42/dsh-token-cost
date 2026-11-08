@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-11-08T06:30:00Z",
   "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
   "currency": "CNY",
@@ -10,13 +10,21 @@
     "ranges": [[9, 12], [14, 18]]
   },
   "models": {
-    "deepseek-flash": {
-      "idle": { "cacheHit": 0.02, "cacheMiss": 1, "output": 4 },
-      "peak": { "cacheHit": 0.04, "cacheMiss": 2, "output": 8 }
-    },
-    "deepseek-v4-pro": {
-      "idle": { "cacheHit": 0.15, "cacheMiss": 4.5, "output": 13.5 },
-      "peak": { "cacheHit": 0.3, "cacheMiss": 9, "output": 27 }
-    }
+    "deepseek-flash": [
+      {
+        "from": "2026-09-10T00:00:00+08:00",
+        "to": null,
+        "idle": { "cacheHit": 0.02, "cacheMiss": 1, "output": 4 },
+        "peak": { "cacheHit": 0.04, "cacheMiss": 2, "output": 8 }
+      }
+    ],
+    "deepseek-v4-pro": [
+      {
+        "from": "2026-09-10T00:00:00+08:00",
+        "to": null,
+        "idle": { "cacheHit": 0.15, "cacheMiss": 4.5, "output": 13.5 },
+        "peak": { "cacheHit": 0.3, "cacheMiss": 9, "output": 27 }
+      }
+    ]
   }
 }

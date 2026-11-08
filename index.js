@@ -97,15 +97,14 @@ function writeJson(file, value) {
 }
 
 function looksLikePricing(doc) {
-  return (
-    doc !== null &&
-    typeof doc === 'object' &&
-    doc.models !== null &&
-    typeof doc.models === 'object' &&
-    Object.values(doc.models).every(
-      (entry) => entry !== null && typeof entry === 'object' && entry.idle !== undefined && entry.peak !== undefined,
-    )
-  );
+  if (doc === null || typeof doc !== 'object' || doc.models === null || typeof doc.models !== 'object') return false;
+  return Object.values(doc.models).every((entry) => {
+    const versions = Array.isArray(entry) ? entry : [entry];
+    if (versions.length === 0) return false;
+    return versions.every(
+      (version) => version !== null && typeof version === 'object' && version.idle !== undefined && version.peak !== undefined,
+    );
+  });
 }
 
 async function fetchWithTimeout(url, options = {}) {
@@ -665,10 +664,11 @@ export function turnsFromEvents(events) {
  * @param {(events: object[]) => object|undefined} [fold] 折叠函数；默认 `foldTurnUsage`（可注入桩做离线测试）。
  * @returns {Array<{turn: number, summary: string|null, startTime: number|null, endTime: number|null, steps: number, toolCalls: number, closed: boolean, usage: object|null, exact: boolean}>}
  */
-export function foldTurns(events, fold) {
+export function foldTurns(events, fold, pricing) {
   const foldUsage = typeof fold === 'function' ? fold : foldTurnUsage;
   return turnsFromEvents(events).map((turn) => {
     const usage = foldUsage(turn.events) ?? null;
+    const priced = pricing === undefined ? undefined : priceTurnEvents(turn.events, pricing);
     return {
       turn: turn.turn,
       summary: turn.summary,
@@ -680,8 +680,51 @@ export function foldTurns(events, fold) {
       usage,
       // 未闭合（还在跑）或折叠器自己标了近似，都算近似
       exact: usage !== null && usage.exact !== false && turn.closed,
+      ...(priced === undefined ? {} : {
+        cost: priced.cost,
+        models: priced.models,
+        unpriced: priced.unpriced,
+      }),
     };
   });
+}
+
+/**
+ * 给一轮里的每次模型调用单独计价：用该次调用自己的时间判峰谷、自己的模型查价目。
+ * 会话级 `modelSelection.lastUsed` 只有一个模型，会话中途换过模型时会算错。
+ * @param {object[]} events 该轮的事件片
+ * @param {object} pricing 价目文档（`pricingDoc(...).doc`）
+ * @returns {{cost: number|null, models: string[], unpriced: number}}
+ */
+export function priceTurnEvents(events, pricing) {
+  const models = new Set();
+  let cost = 0;
+  let priced = false;
+  let unpriced = 0;
+  let headerModel = null;
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.type === 'request/header') {
+      const candidate = event.data?.header?.config?.model;
+      if (typeof candidate === 'string' && candidate !== '') headerModel = candidate;
+      continue;
+    }
+    if (event?.type !== 'assistant/message') continue;
+    const usage = event.data?.usage;
+    if (usage === null || typeof usage !== 'object') continue;
+    const model = event.data?.message?.source?.model ?? headerModel;
+    const table = priceAt(pricing, model, typeof event.time === 'number' ? event.time : Date.now()).table;
+    if (table === null) {
+      unpriced += 1;
+      continue;
+    }
+    const miss = asFinite(usage.inputTokens ?? usage.uncachedInputTokens);
+    const cache = asFinite(usage.cacheReadTokens) + asFinite(usage.cacheWriteTokens);
+    const output = asFinite(usage.outputTokens);
+    cost += (miss / 1e6) * table.cacheMiss + (cache / 1e6) * table.cacheHit + (output / 1e6) * table.output;
+    priced = true;
+    if (typeof model === 'string' && model !== '') models.add(model);
+  }
+  return { cost: priced ? cost : null, models: [...models], unpriced };
 }
 
 /**
@@ -759,11 +802,8 @@ async function sessionCostPayload(ctx, config, sessionId) {
     usage.cacheReadTokens += asFinite(reported.cacheReadTokens)
     usage.cacheWriteTokens += asFinite(reported.cacheWriteTokens)
     usage.outputTokens += output
-    const price = model === null ? undefined : doc.models?.[model]
-    if (price === undefined) continue
-    const tier = peakTierAt(doc.peakRule, typeof event.time === 'number' ? event.time : lastAt)
-    const table = price[tier]
-    if (table === undefined) continue
+    const table = priceAt(doc, model, typeof event.time === 'number' ? event.time : lastAt).table
+    if (table === null) continue
     priced = true
     cost += (miss / 1e6) * table.cacheMiss + (cache / 1e6) * table.cacheHit + (output / 1e6) * table.output
   }
@@ -792,6 +832,59 @@ export function peakTierAt(rule, ms) {
   const hour = Number(get('hour'))
   const inWindow = ranges.some((range) => Array.isArray(range) && hour >= range[0] && hour < range[1])
   return weekdays.includes(weekday) && inWindow ? 'peak' : 'idle'
+}
+
+/* 价目版本：每个模型可以是单版本 {idle,peak}（旧写法）或版本数组 [{from,to,idle,peak}]。 */
+function toMs(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value !== '') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+/** 把某个模型的价目归一化成按 `from` 升序的版本数组。 */
+export function priceVersions(entry) {
+  if (entry === null || entry === undefined) return null
+  const list = Array.isArray(entry) ? entry : [entry]
+  const versions = list
+    .filter((version) => version !== null && typeof version === 'object')
+    .map((version) => ({
+      from: toMs(version.from) ?? -Infinity,
+      to: toMs(version.to) ?? Infinity,
+      idle: version.idle,
+      peak: version.peak,
+    }))
+    .sort((left, right) => left.from - right.from)
+  return versions.length === 0 ? null : versions
+}
+
+/**
+ * 选出生效版本：`from <= t < to`；早于最早版本用最早版本并告警，落在空隙用下一个版本并告警。
+ * @returns {{version: object|null, warning: string|null}}
+ */
+export function pickPriceVersion(entry, ms) {
+  const versions = priceVersions(entry)
+  if (versions === null) return { version: null, warning: 'model-unpriced' }
+  const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now()
+  const hit = versions.find((version) => at >= version.from && at < version.to)
+  if (hit !== undefined) return { version: hit, warning: null }
+  if (at < versions[0].from) return { version: versions[0], warning: 'pricing-before-coverage' }
+  return { version: versions[versions.length - 1], warning: 'pricing-gap' }
+}
+
+/**
+ * 某次调用在某一时刻、某一模型下的价格表（含峰谷档位）。
+ * @returns {{table: object|null, tier: string, warning: string|null}}
+ */
+export function priceAt(doc, model, ms) {
+  const entry = typeof model === 'string' ? doc?.models?.[model] : undefined
+  const picked = pickPriceVersion(entry, ms)
+  const tier = peakTierAt(doc?.peakRule, ms)
+  if (picked.version === null) return { table: null, tier, warning: picked.warning }
+  const table = picked.version[tier]
+  return { table: table === undefined ? null : table, tier, warning: picked.warning }
 }
 
 export function apply(ctx, config = {}) {
@@ -846,7 +939,8 @@ export function apply(ctx, config = {}) {
       return null;
     })();
 
-    const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold), outline);
+    const { doc } = await pricingDoc(config);
+    const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold, doc), outline);
     const selected = turns.slice(Math.max(0, turns.length - limit));
     const payload = {
       sessionId,
