@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.5.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.5.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.5.1**（2026-11-08）：面板高度回调（330×340 太矮，会话列表只剩 5～6 行）→ **340 宽、最高 480px**，列表可视高度 320px（约 11 行）。
 
 - **v2.5.0**（2026-11-08）：**本机累计改成 Host 侧权威值** + **面板瘦身**。① 之前「本机累计」用的是客户端合计，它只覆盖已加载投影的会话，冷启动时会严重偏小（实测只算到 ¥13，官方 ¥96.9），导致账本显示 86% 的假偏差；现在 Host 直接扫 `$DSH_HOME/sessions` 下全部会话日志逐事件算（缓存 10 分钟，导出 `invalidateLocalTotalCache()` 可手动刷新）。② 面板尺寸 364×520 → **330×340**，账本压成两行（消耗行 / 额度余额行），会话列表限高 168px 可滚动。
 
