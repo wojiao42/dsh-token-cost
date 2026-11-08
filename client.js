@@ -625,7 +625,14 @@ window.__ModuleLoader__.load({
     /** 一轮用量的展示数据（纯函数，便于离线断言）。 */
     function turnView(turn, price, openLabel, approxLabel, untitledLabel) {
       const usage = turn.usage;
-      const cost = usage === null || usage === undefined ? null : costOf(usage, price, turn.startTime);
+      // 宿主已按该轮每次调用自己的时间与模型算好金额时优先用它；
+      // 老宿主不返回 cost 时退回会话级估算。
+      const cost =
+        typeof turn.cost === 'number'
+          ? { total: turn.cost }
+          : usage === null || usage === undefined
+            ? null
+            : costOf(usage, price, turn.startTime);
       const billed =
         usage === null || usage === undefined
           ? null

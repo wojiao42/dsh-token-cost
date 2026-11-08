@@ -162,6 +162,7 @@ apply(
   { fold: (events) => ({ uncachedInputTokens: events.length }) },
 );
 assert('apply registers the turns route', routes.get('/token-cost/turns')?.kind === 'exact');
+const route = routes.get('/token-cost/turns');
 
 const fakeResponse = () => {
   const state = { status: 0, body: '' };

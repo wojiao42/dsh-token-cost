@@ -665,10 +665,11 @@ export function turnsFromEvents(events) {
  * @param {(events: object[]) => object|undefined} [fold] 折叠函数；默认 `foldTurnUsage`（可注入桩做离线测试）。
  * @returns {Array<{turn: number, summary: string|null, startTime: number|null, endTime: number|null, steps: number, toolCalls: number, closed: boolean, usage: object|null, exact: boolean}>}
  */
-export function foldTurns(events, fold) {
+export function foldTurns(events, fold, pricing) {
   const foldUsage = typeof fold === 'function' ? fold : foldTurnUsage;
   return turnsFromEvents(events).map((turn) => {
     const usage = foldUsage(turn.events) ?? null;
+    const priced = pricing === undefined ? undefined : priceTurnEvents(turn.events, pricing);
     return {
       turn: turn.turn,
       summary: turn.summary,
@@ -680,8 +681,57 @@ export function foldTurns(events, fold) {
       usage,
       // 未闭合（还在跑）或折叠器自己标了近似，都算近似
       exact: usage !== null && usage.exact !== false && turn.closed,
+      ...(priced === undefined ? {} : {
+        cost: priced.cost,
+        models: priced.models,
+        unpriced: priced.unpriced,
+      }),
     };
   });
+}
+
+/**
+ * 给一轮里的每次模型调用单独计价：用该次调用自己的时间判峰谷、自己的模型查价目。
+ * 会话级 `modelSelection.lastUsed` 只有一个模型，会话中途换过模型时会算错。
+ * @param {object[]} events 该轮的事件片
+ * @param {object} pricing 价目文档（`pricingDoc(...).doc`）
+ * @returns {{cost: number|null, models: string[], unpriced: number}}
+ */
+export function priceTurnEvents(events, pricing) {
+  const models = new Set();
+  let cost = 0;
+  let priced = false;
+  let unpriced = 0;
+  let headerModel = null;
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.type === 'request/header') {
+      const candidate = event.data?.header?.config?.model;
+      if (typeof candidate === 'string' && candidate !== '') headerModel = candidate;
+      continue;
+    }
+    if (event?.type !== 'assistant/message') continue;
+    const usage = event.data?.usage;
+    if (usage === null || typeof usage !== 'object') continue;
+    const model = event.data?.message?.source?.model ?? headerModel;
+    const price = typeof model === 'string' ? pricing?.models?.[model] : undefined;
+    if (price === undefined) {
+      unpriced += 1;
+      continue;
+    }
+    const tier = peakTierAt(pricing.peakRule, typeof event.time === 'number' ? event.time : Date.now());
+    const table = price[tier];
+    if (table === undefined) {
+      unpriced += 1;
+      continue;
+    }
+    const miss = asFinite(usage.inputTokens ?? usage.uncachedInputTokens);
+    const cache = asFinite(usage.cacheReadTokens) + asFinite(usage.cacheWriteTokens);
+    const output = asFinite(usage.outputTokens);
+    cost += (miss / 1e6) * table.cacheMiss + (cache / 1e6) * table.cacheHit + (output / 1e6) * table.output;
+    priced = true;
+    if (typeof model === 'string' && model !== '') models.add(model);
+  }
+  return { cost: priced ? cost : null, models: [...models], unpriced };
 }
 
 /**
@@ -846,7 +896,8 @@ export function apply(ctx, config = {}) {
       return null;
     })();
 
-    const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold), outline);
+    const { doc } = await pricingDoc(config);
+    const turns = remapTurnNumbers(foldTurns(events ?? [], config.fold, doc), outline);
     const selected = turns.slice(Math.max(0, turns.length - limit));
     const payload = {
       sessionId,
