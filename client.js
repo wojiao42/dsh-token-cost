@@ -1258,7 +1258,11 @@ window.__ModuleLoader__.load({
       const totals = summary.totals;
       if (totals.billed === 0 && totals.active === 0) return null;
 
-      const money = totals.cost > 0 ? '≈' + fmtMoney(totals.cost) : null;
+      // Host 扫日志算出的权威本机累计；客户端的 totals.cost 只覆盖已加载投影的会话，冷启动会偏小
+      const authoritativeCost =
+        net !== null && net.ok === true && typeof net.local === 'number' && net.local > 0 ? net.local : null;
+      const shownCost = authoritativeCost === null ? totals.cost : authoritativeCost;
+      const money = shownCost > 0 ? '≈' + fmtMoney(shownCost) : null;
       const currentId = currentSessionIdOf(sessions);
       const current = currentId === undefined ? undefined : summary.rows.find((row) => row.id === currentId);
       // 徽标只留金额：截至时刻放到悬停展开的面板元信息里（见 totals.asOf 那一行）

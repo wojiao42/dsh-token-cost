@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.6.4-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.6.5-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.6.5**（2026-11-08）：徽标与面板标题的「累计」改用 Host 扫日志的权威值（冷启动不再只显示已加载会话那一小截，之前会显示 ¥17.95 而实际 ¥98.33）。
 
 - **v2.6.4**（2026-11-08）：修「升级后按次费用没生效」。旧的价目表缓存（v2.6.0 之前写入）没有 `perRequest` 字段，而 7 天 TTL 又让它一直算“新鲜”，于是 Search/Fetch 费用读不到。现在缺 `perRequest` 的缓存一律视为过期，且缓存/回退时会用内置表补齐缺失字段。
 
