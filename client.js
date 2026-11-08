@@ -414,12 +414,16 @@ window.__ModuleLoader__.load({
     const sessionFillCache = new Map();
     const SESSION_FILL_TTL_MS = 60_000;
 
+    /** 会话真实费用（Host 按每个事件的时间/模型逐笔定价）的缓存。 */
+    const costOverrides = new Map();
+    const COST_TTL_MS = 10 * 60 * 1000;
+
     /**
      * Fold every known session's cached projections into one summary.
      * Running sessions sort first, then by estimated cost.
      * fills 是投影缺失时的兜底数据（Host 直接从日志折出来的总量/模型）。
      */
-    function aggregateSessions(list, fills) {
+    function aggregateSessions(list, fills, costs) {
       const rows = [];
       const seen = new Set();
       const add = (id, row, rawValues) => {
@@ -437,6 +441,12 @@ window.__ModuleLoader__.load({
             values = { ...values, modelSelection: { lastUsed: { model: fill.model } } };
           }
         }
+        const authoritative = costs === undefined ? undefined : costs[id];
+        const rowCost =
+          authoritative !== undefined && authoritative !== null && typeof authoritative.cost === 'number'
+            ? { total: authoritative.cost }
+            : undefined;
+        const measured = sessionUsageOf(values, asNumber(row?.updatedAt));
         seen.add(id);
         rows.push({
           id,
@@ -444,7 +454,9 @@ window.__ModuleLoader__.load({
           running: row?.running === true,
           origin: row?.origin,
           updatedAt: asNumber(row?.updatedAt),
-          ...sessionUsageOf(values, asNumber(row?.updatedAt)),
+          ...measured,
+          model: measured.model ?? authoritative?.model ?? null,
+          ...(rowCost === undefined ? {} : { cost: rowCost }),
         });
       };
       for (const id of list?.ids ?? []) {
@@ -900,7 +912,8 @@ window.__ModuleLoader__.load({
       const sessions = useSessionsSnapshot(sessionsSource, useSessions);
       const [open, setOpen] = React.useState(false);
       const [fills, setFills] = React.useState({});
-      const summary = React.useMemo(() => aggregateSessions(sessions, fills), [sessions, fills]);
+      const [costs, setCosts] = React.useState({});
+      const summary = React.useMemo(() => aggregateSessions(sessions, fills, costs), [sessions, fills, costs]);
       const [position, setPosition] = React.useState(null);
       const rootRef = React.useRef(null);
       const warmRef = React.useRef(warmProjections);
@@ -910,6 +923,43 @@ window.__ModuleLoader__.load({
       // Host 的控制基线只覆盖当前活跃 Session，后台任务的会话是冷的：它们没有
       // tokenUsage。对缺数据的会话逐个取证（先运行中的，再最近更新的），
       // 数量有上限；面板里的「载入其余会话」会取消上限重试一遍。
+      // 真实费用：Host 用每个事件自己的时间/模型逐笔定价（投影里只有整会话汇总，
+      // 按「最后活动时间」一个档位定价会把跨高峰/空闲的会话算高或算低）。
+      React.useEffect(() => {
+        const ids = Array.isArray(sessions?.ids) ? sessions.ids : [];
+        const missing = ids.filter((id) => {
+          const hit = costOverrides.get(id);
+          return hit === undefined || Date.now() - hit.at >= COST_TTL_MS;
+        });
+        if (missing.length === 0 || typeof fetch !== 'function') return undefined;
+        let cancelled = false;
+        const run = async () => {
+          for (let start = 0; start < missing.length; start += 25) {
+            if (cancelled) return;
+            const chunk = missing.slice(start, start + 25);
+            try {
+              const response = await fetch('/token-cost/costs?ids=' + encodeURIComponent(chunk.join(',')));
+              if (!response.ok) continue;
+              const payload = await response.json();
+              const fresh = {};
+              for (const [id, value] of Object.entries(payload.costs ?? {})) {
+                if (value !== null && value !== undefined && typeof value.cost === 'number') {
+                  costOverrides.set(id, { at: Date.now(), value });
+                  fresh[id] = value;
+                }
+              }
+              if (!cancelled && Object.keys(fresh).length > 0) setCosts((previous) => ({ ...previous, ...fresh }));
+            } catch {
+              /* 单批失败不影响其它会话 */
+            }
+          }
+        };
+        void run();
+        return () => {
+          cancelled = true;
+        };
+      }, [sessions]);
+
       // 投影缺失的会话（冷会话 / 历史会话 / 投影缓存被清掉）直接问 Host 从日志折总量，
       // 否则面板上它们 token 是 0、费用是「—」——「历史用量全是横线」就是这么来的。
       React.useEffect(() => {

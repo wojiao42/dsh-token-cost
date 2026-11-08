@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.0.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.1.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -185,6 +185,12 @@ const PRICES = {
 
 ### 计价规则自动更新
 
+### 费用是按「每一次请求」算的
+
+面板上每个会话的 ¥ 不再用「会话最后活动时间」套一个档位，而是由 Host **逐个 `assistant/message` 事件**按它自己的时间取高峰/空闲档、按当时的模型取价再累加（新路由 `GET /token-cost/costs?ids=…`，批量 40 个、缓存 10 分钟）。
+
+原因很实际：投影里只有整会话的 token 汇总，没有时间分布。一个会话如果从空闲时段跨进高峰时段（或反之），用「最后活动时间」给整段定价会 ×2 或 ÷2。实测有个 10-06 的会话：291 个事件在空闲档、3 个在高峰档，按最后活动时间算成 ¥5.92，逐事件真值 ¥3.00。
+
 价目表在仓库根目录的 `pricing.json`（含模型单价、高峰/空闲规则、更新时间和来源链接）。Host 每 24 小时拉一次，缓存到 `$DSH_HOME/token-cost/pricing.json`；远程拿不到就退回缓存，再退回插件内置表。所以官方调价后只要改一次 `pricing.json`，所有用户下一次打开面板就用新价，**不用等插件发版**。
 
 ## 安装
@@ -281,7 +287,10 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 
 ## 版本
 
-最新在最上。版本号取自各提交里的 `package.json`，日期是 git 提交日期。
+最新在最上。
+
+- **v2.1.0**（2026-11-08）：**费用改为逐事件定价**。之前按「会话最后活动时间」给整段用量套一个高峰/空闲档，跨档位的会话会被算成 2 倍或一半（实测一个会话 ¥5.92 → ¥3.00）。现在 Host 按每个 `assistant/message` 自己的时间与当时的模型逐笔累加，新增 `GET /token-cost/costs?ids=…` 批量接口（40 个/次、10 分钟缓存），面板与徽标改用真实费用。
+版本号取自各提交里的 `package.json`，日期是 git 提交日期。
 
 - **v2.0.1**（2026-11-08）：投影缺失的历史/冷会话不再显示「token 0 / 费用 —」—— 面板改问 Host 的 `/token-cost/session-usage`，由 Host 直接从会话日志里累加 provider 上报的 usage 并带回模型名（并发 4、缓存 60s，取不到就不显示）。
 

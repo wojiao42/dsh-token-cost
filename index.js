@@ -27,6 +27,10 @@ const CACHE_TTL_MS = 15_000;
 /** 会话总用量兜底查询的缓存（见 sessionUsagePayload）。 */
 const usageCache = new Map();
 
+/** 会话真实费用（逐事件定价）的缓存。 */
+const costCache = new Map();
+const COST_TTL_MS = 10 * 60 * 1000;
+
 /** 计价规则与官方余额对账（都需要联网，默认关闭，由配置里的 network 打开）。 */
 const PRICING_URL_DEFAULT = 'https://raw.githubusercontent.com/wojiao42/dsh-token-cost/main/pricing.json';
 const BALANCE_URL = 'https://api.deepseek.com/user/balance';
@@ -453,6 +457,81 @@ function sendJson(response, status, body) {
  * @param ctx Host 插件上下文。
  * @param config 可选 `{ fold?: (events) => object|undefined }`，覆盖默认的官方折叠函数（离线测试用）。
  */
+/**
+ * 会话总用量 + **逐事件算出的真实费用**（按每个 assistant/message 自己的时间取高峰/空闲档，
+ * 并按当时的模型取价）。投影里只有整会话的 token 汇总、没有时间分布，所以客户端如果拿
+ * 「最后活动时间」给整个会话定价，跨档位的会话会算高（或算低）。
+ *
+ * route: GET /token-cost/costs?ids=id1,id2,...  （一次最多 40 个）
+ */
+async function sessionCostPayload(ctx, config, sessionId) {
+  const cached = costCache.get(sessionId)
+  if (cached !== undefined && Date.now() - cached.at < COST_TTL_MS) return cached.payload;
+  const query = ctx.get('sessionQuery')
+  if (query === undefined || typeof query.readSession !== 'function') throw new Error('sessionQuery unavailable')
+  const { doc } = await pricingDoc(config)
+  const { events } = await query.readSession(sessionId)
+  const usage = { uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 }
+  let model = null
+  let firstAt = null
+  let lastAt = null
+  let cost = 0
+  let priced = false
+  for (const event of events ?? []) {
+    if (event === null || typeof event !== 'object') continue
+    if (typeof event.time === 'number') {
+      if (firstAt === null || event.time < firstAt) firstAt = event.time
+      if (lastAt === null || event.time > lastAt) lastAt = event.time
+    }
+    if (event.type === 'request/header') {
+      const candidate = event.data?.header?.config?.model
+      if (typeof candidate === 'string' && candidate !== '') model = candidate
+    }
+    if (event.type !== 'assistant/message') continue
+    const reported = event.data?.usage
+    if (reported === null || typeof reported !== 'object') continue
+    const miss = asFinite(reported.inputTokens ?? reported.uncachedInputTokens)
+    const cache = asFinite(reported.cacheReadTokens) + asFinite(reported.cacheWriteTokens)
+    const output = asFinite(reported.outputTokens)
+    usage.uncachedInputTokens += miss
+    usage.cacheReadTokens += asFinite(reported.cacheReadTokens)
+    usage.cacheWriteTokens += asFinite(reported.cacheWriteTokens)
+    usage.outputTokens += output
+    const price = model === null ? undefined : doc.models?.[model]
+    if (price === undefined) continue
+    const tier = peakTierAt(doc.peakRule, typeof event.time === 'number' ? event.time : lastAt)
+    const table = price[tier]
+    if (table === undefined) continue
+    priced = true
+    cost += (miss / 1e6) * table.cacheMiss + (cache / 1e6) * table.cacheHit + (output / 1e6) * table.output
+  }
+  const payload = { sessionId, usage, model, cost: priced ? cost : null, firstAt, lastAt }
+  costCache.set(sessionId, { at: Date.now(), payload })
+  return payload
+}
+
+/** 按 peakRule 判断某个时刻是高峰还是空闲（与 pricing.json 的规则一致）。 */
+export function peakTierAt(rule, ms) {
+  const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now()
+  const zone = rule?.timeZone ?? 'Asia/Shanghai'
+  const weekdays = Array.isArray(rule?.weekdays) ? rule.weekdays : [1, 2, 3, 4, 5]
+  const ranges = Array.isArray(rule?.ranges) ? rule.ranges : [[9, 12], [14, 18]]
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    weekday: 'short',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(at))
+  const get = (type) => {
+    const hit = parts.find((part) => part.type === type)
+    return hit === undefined ? undefined : hit.value
+  }
+  const weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(get('weekday')) + 1
+  const hour = Number(get('hour'))
+  const inWindow = ranges.some((range) => Array.isArray(range) && hour >= range[0] && hour < range[1])
+  return weekdays.includes(weekday) && inWindow ? 'peak' : 'idle'
+}
+
 export function apply(ctx, config = {}) {
   /** sessionId → { at, payload }：短缓存，鼠标扫过面板时不重复读日志。 */
   const cache = new Map();
@@ -648,6 +727,47 @@ export function apply(ctx, config = {}) {
           },
         }),
       'token-cost: session usage route',
+    );
+
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: '/token-cost/costs',
+          handler: async (request, response) => {
+            if (request.method !== 'GET' && request.method !== 'HEAD') {
+              response.writeHead(405, { allow: 'GET, HEAD' });
+              response.end();
+              return;
+            }
+            const url = new URL(request.url ?? '/', 'http://localhost');
+            const raw = url.searchParams.get('ids') ?? '';
+            const ids = raw
+              .split(',')
+              .map((id) => id.trim())
+              .filter((id) => id !== '')
+              .slice(0, 40);
+            if (ids.length === 0) {
+              sendJson(response, 400, { error: 'ids is required' });
+              return;
+            }
+            const costs = {};
+            for (const id of ids) {
+              try {
+                costs[id] = await sessionCostPayload(ctx, config, id);
+              } catch {
+                costs[id] = null;
+              }
+            }
+            if (request.method === 'HEAD') {
+              response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+              response.end();
+              return;
+            }
+            sendJson(response, 200, { costs });
+          },
+        }),
+      'token-cost: authoritative per-session cost route',
     );
   });
 }

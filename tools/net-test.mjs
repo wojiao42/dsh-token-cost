@@ -105,7 +105,7 @@ apply(
   { network: { pricing: true, balance: true }, balance: { readCredentials: true } },
 )
 
-assertEqual('注册了四条路由', [...routes.keys()].sort(), ['/token-cost/balance', '/token-cost/pricing', '/token-cost/session-usage', '/token-cost/turns'])
+assertEqual('注册了五条路由', [...routes.keys()].sort(), ['/token-cost/balance', '/token-cost/costs', '/token-cost/pricing', '/token-cost/session-usage', '/token-cost/turns'])
 
 // 计价：远程成功
 fetchImpl = async () => ({
@@ -202,6 +202,36 @@ assertEqual('缺 sessionId 报 400', (await call('/token-cost/session-usage')).s
 assertEqual('读不到会话报 404', (await call('/token-cost/session-usage?sessionId=bad')).status, 404)
 const cachedUsage = await call('/token-cost/session-usage?sessionId=a')
 assertEqual('兜底结果有短缓存（同一会话再问一次仍成功）', cachedUsage.status, 200)
+
+
+// ── 逐事件定价：高峰/空闲档 + 真实费用路由 ─────────────────────
+const { peakTierAt, EMBEDDED_PRICING: PRICING } = mod
+assertEqual('北京 10:00 周一 = peak', peakTierAt(PRICING.peakRule, Date.parse('2026-11-09T02:00:00Z')), 'peak')
+assertEqual('北京 12:30 = idle', peakTierAt(PRICING.peakRule, Date.parse('2026-11-09T04:30:00Z')), 'idle')
+assertEqual('北京 15:00 = peak', peakTierAt(PRICING.peakRule, Date.parse('2026-11-09T07:00:00Z')), 'peak')
+assertEqual('周六 10:00 = idle', peakTierAt(PRICING.peakRule, Date.parse('2026-11-14T02:00:00Z')), 'idle')
+
+// 清掉前面测试改过的远程价表缓存，这里要用内置表算
+fs.rmSync(path?.join?.(HOME, 'token-cost', 'pricing.json') ?? '', { force: true })
+routes = new Map()
+const costEvents = [
+  { type: 'request/header', time: 1, data: { header: { config: { model: 'deepseek-flash' } } } },
+  { type: 'assistant/message', time: Date.parse('2026-11-09T02:00:00Z'), data: { usage: { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 } } },
+  { type: 'assistant/message', time: Date.parse('2026-11-09T04:30:00Z'), data: { usage: { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1_000_000 } } },
+]
+apply(
+  {
+    get: (name) => (name === 'sessionQuery' ? { async readSession() { return { events: costEvents } } } : undefined),
+    inject: (names, callback) =>
+      callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
+  },
+  {},
+)
+const costRes = await call('/token-cost/costs?ids=a')
+const costA = costRes.body?.costs?.a
+assertEqual('按每个事件自己的时间取档：peak 1M 输入 2 元 + idle 1M 输出 4 元', Number(costA?.cost?.toFixed(2)), 6)
+assertEqual('同时回报 token 汇总与模型', [costA?.usage?.outputTokens, costA?.model], [1_000_000, 'deepseek-flash'])
+assertEqual('缺 ids 报 400', (await call('/token-cost/costs')).status, 400)
 
 fs.rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)
