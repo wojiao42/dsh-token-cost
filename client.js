@@ -222,6 +222,9 @@ window.__ModuleLoader__.load({
       tool: '工具',
       cacheRate: '缓存命中率',
       maxShare: '最大占比',
+      badgeBalance: '余额',
+      badgeTotal: '累计',
+      badgeCurrent: '本会话',
       hint: '点一行切换到该会话；费用按内置单价估算。',
       unpriced: '部分会话的模型没有内置单价，其 token 未计入费用。',
       empty: '暂无用量',
@@ -288,6 +291,9 @@ window.__ModuleLoader__.load({
       tool: 'tools',
       cacheRate: 'Cache hit',
       maxShare: 'Max share',
+      badgeBalance: 'Balance',
+      badgeTotal: 'Total',
+      badgeCurrent: 'Session',
       hint: 'Click a row to switch to that session; cost is estimated.',
       unpriced: 'Some sessions use a model without a built-in price.',
       empty: 'No usage yet',
@@ -1147,7 +1153,6 @@ window.__ModuleLoader__.load({
         return () => clearInterval(id);
       }, [open]);
       React.useEffect(() => {
-        if (!open) return undefined;
         let stopped = false;
         const load = async () => {
           if (typeof fetch !== 'function') return;
@@ -1161,7 +1166,7 @@ window.__ModuleLoader__.load({
           }
         };
         load();
-        const timer = setInterval(load, 60_000);
+        const timer = setInterval(load, open ? 60_000 : 300_000);
         return () => {
           stopped = true;
           clearInterval(timer);
@@ -1276,8 +1281,11 @@ window.__ModuleLoader__.load({
         ? h(
             'span',
             { className: 'tcs-lines' },
-            badgeLine('total', totalLine, 'total', totals.running > 0),
-            currentLine === null ? null : badgeLine('current', currentLine, 'current'),
+            net !== null && net.ok === true && typeof net.total === 'number'
+              ? badgeLine('badgeBalance', fmtMoney(net.total), 'balance')
+              : null,
+            badgeLine('badgeTotal', totalLine, 'total', totals.running > 0),
+            currentLine === null ? null : badgeLine('badgeCurrent', currentLine, 'current'),
           )
         : h('span', { className: 'tcs-label' }, money ?? fmtCompact(totals.billed));
 

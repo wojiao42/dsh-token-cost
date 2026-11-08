@@ -208,9 +208,9 @@ const badge = render({ useSessions, t, openSession: (id) => opened.push(id), war
 const badgeNodes = collect(badge);
 const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').map((entry) => entry.text);
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('badge shows two compact lines: total, then the current task',
+assertEqual('badge shows compact lines: total, then the current task',
   [badgeKeys, badgeValues.map(clockless)],
-  [['全部', '当前'], ['≈¥0.0167', '≈¥0.00318 · 50.0%']]);
+  [['累计', '本会话'], ['≈¥0.0167', '≈¥0.00318 · 50.0%']]);
 assert('the badge no longer carries the as-of clock', !/截至/.test(badgeValues.join(' ')));
 assert('a running session shows as a dot on the total line',
   collect(badge).some((entry) => entry.className === 'tcs-dot' && entry.node.props['data-running'] === 'true'));

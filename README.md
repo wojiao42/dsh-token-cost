@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.6.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.6.2-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.6.2**（2026-11-08）：侧栏徽标改成**三排**——余额 / 累计 / 本会话；余额查询改为常驻（收起时 5 分钟刷新一次，展开面板时 60 秒）。
 
 - **v2.6.1**（2026-11-08）：补上价目表刷新周期的测试断言（默认 7 天 / `network.pricingRefreshHours` 覆盖 / 非法值回退），并导出 `pricingTtlMs()` 方便校验。
 
