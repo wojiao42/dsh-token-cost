@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.4.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.5.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.5.0**（2026-11-08）：**本机累计改成 Host 侧权威值** + **面板瘦身**。① 之前「本机累计」用的是客户端合计，它只覆盖已加载投影的会话，冷启动时会严重偏小（实测只算到 ¥13，官方 ¥96.9），导致账本显示 86% 的假偏差；现在 Host 直接扫 `$DSH_HOME/sessions` 下全部会话日志逐事件算（缓存 10 分钟，导出 `invalidateLocalTotalCache()` 可手动刷新）。② 面板尺寸 364×520 → **330×340**，账本压成两行（消耗行 / 额度余额行），会话列表限高 168px 可滚动。
 
 - **v2.4.1**（2026-11-08）：修面板展开瞬间崩溃（`Cannot read properties of undefined (reading 'gap')`）。v2.2.0 起余额查询走 Platform 汇总，返回结构里没有旧的 `drift` 字段，而面板 meta 行还按 `net.drift !== null` 判断——`undefined !== null` 成立，于是读 `net.drift.gap` 抛错、徽标整个从侧栏消失。改为同时判 undefined；展开面板会正常显示账本。
 

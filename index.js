@@ -14,6 +14,7 @@
  */
 
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { zstdDecompressSync } from 'node:zlib';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -32,6 +33,10 @@ const costCache = new Map();
 
 /** Platform 账号汇总（余额 + 官方累计花费）的短缓存。 */
 const accountSummaryCache = new Map();
+
+/** 本机累计花费（Host 侧扫全部会话日志）的缓存。 */
+const localTotalCache = new Map();
+const LOCAL_TOTAL_TTL_MS = 10 * 60 * 1000;
 const COST_TTL_MS = 10 * 60 * 1000;
 
 /** 计价规则与官方余额对账（都需要联网，默认关闭，由配置里的 network 打开）。 */
@@ -220,6 +225,121 @@ function resolveAccountToken(config, env = process.env) {
  * 比对「官方余额」更有用的对账基准是 total_costs —— 它和本地累计花费是同一量纲，
  * 一次读取就能算出偏差，不需要等两个快照。
  */
+/** 清空本机累计花费缓存（测试与手动刷新用）。 */
+export function invalidateLocalTotalCache() {
+  localTotalCache.clear();
+}
+
+/**
+ * 本机累计花费（Host 侧权威值）：直接读 $DSH_HOME/sessions 下所有会话日志，
+ * 对每条 assistant/message 按它自己的时间取高峰/空闲档、按当时的模型取价累加。
+ * 客户端那份「全部」合计依赖会话投影是否已加载，冷启动时会严重偏小，不能用来对账。
+ */
+async function localTotalPayload(config) {
+  const hit = localTotalCache.get('local');
+  if (hit !== undefined && Date.now() - hit.at < LOCAL_TOTAL_TTL_MS) return hit.value;
+  const { doc } = await pricingDoc(config);
+  const root = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'sessions');
+  let total = 0;
+  let sessions = 0;
+  let firstAt = null;
+  let lastAt = null;
+  let buckets = [];
+  try {
+    buckets = readdirSync(root);
+  } catch {
+    buckets = [];
+  }
+  for (const bucket of buckets) {
+    const bucketDir = join(root, bucket);
+    let entries = [];
+    try {
+      entries = readdirSync(bucketDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      let files = [];
+      try {
+        files = readdirSync(join(bucketDir, entry)).filter((name) => /^session\.v\d+\.jsonl(\.zstd)?$/.test(name));
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        let events = [];
+        try {
+          events = readSessionEvents(join(bucketDir, entry, file));
+        } catch {
+          continue;
+        }
+        let model = 'deepseek-flash';
+        let sessionCost = 0;
+        for (const event of events) {
+          if (event === null || typeof event !== 'object') continue;
+          if (event.type === 'request/header') {
+            const candidate = event.data?.header?.config?.model;
+            if (typeof candidate === 'string' && candidate !== '') model = candidate;
+            continue;
+          }
+          if (event.type !== 'assistant/message') continue;
+          const reported = event.data?.usage;
+          if (reported === null || reported === undefined || typeof reported !== 'object') continue;
+          const price = doc.models?.[model];
+          if (price === undefined) continue;
+          const table = price[peakTierAt(doc.peakRule, typeof event.time === 'number' ? event.time : Date.now())];
+          if (table === undefined) continue;
+          const miss = asFinite(reported.inputTokens ?? reported.uncachedInputTokens);
+          const cache = asFinite(reported.cacheReadTokens) + asFinite(reported.cacheWriteTokens);
+          const output = asFinite(reported.outputTokens);
+          sessionCost += (miss / 1e6) * table.cacheMiss + (cache / 1e6) * table.cacheHit + (output / 1e6) * table.output;
+          if (typeof event.time === 'number') {
+            if (firstAt === null || event.time < firstAt) firstAt = event.time;
+            if (lastAt === null || event.time > lastAt) lastAt = event.time;
+          }
+        }
+        if (sessionCost > 0) {
+          total += sessionCost;
+          sessions += 1;
+        }
+      }
+    }
+  }
+  const value = { total, sessions, firstAt, lastAt, asOf: Date.now() };
+  localTotalCache.set('local', { at: Date.now(), value });
+  return value;
+}
+
+/** 读一个会话日志：多帧 zstd 逐帧解；老格式（纯 jsonl）直接当文本读。 */
+function readSessionEvents(file) {
+  const buf = readFileSync(file);
+  const text = file.endsWith('.zstd') ? decodeZstdFrames(buf) : buf.toString('utf8');
+  const events = [];
+  for (const line of text.split('\n')) {
+    if (line === '') continue;
+    try {
+      events.push(JSON.parse(line));
+    } catch {
+      /* 半行/坏行跳过 */
+    }
+  }
+  return events;
+}
+
+function decodeZstdFrames(buf) {
+  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+  const parts = [];
+  let offset = 0;
+  while (offset < buf.length) {
+    const start = buf.indexOf(magic, offset);
+    if (start === -1) break;
+    const next = buf.indexOf(magic, start + 4);
+    parts.push(zstdDecompressSync(buf.subarray(start, next === -1 ? buf.length : next)));
+    if (next === -1) break;
+    offset = next;
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
 async function platformSummary(config) {
   const resolved = resolveAccountToken(config)
   if (resolved === undefined) return undefined
@@ -286,7 +406,15 @@ async function balancePayload(config, localTotal) {
   try {
     const platform = await platformSummary(config);
     if (platform !== undefined) {
-      const local = typeof localTotal === 'number' && Number.isFinite(localTotal) ? localTotal : null;
+      let local = typeof localTotal === 'number' && Number.isFinite(localTotal) ? localTotal : null;
+      // 客户端那份「全部合计」在冷启动时只覆盖已加载的会话，会严重偏小；
+      // 能用 Host 扫全部日志的权威值就用它（缓存 10 分钟）。
+      try {
+        const authoritative = await localTotalPayload(config);
+        if (authoritative.sessions > 0) local = authoritative.total;
+      } catch {
+        /* 扫日志失败就退回客户端上报值 */
+      }
       const officialTotalCost = typeof platform.officialTotalCost === 'number' ? platform.officialTotalCost : null;
       const totalCredit =
         officialTotalCost !== null && typeof platform.total === 'number'

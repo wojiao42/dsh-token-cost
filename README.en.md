@@ -9,7 +9,7 @@ Live token usage and estimated cost in the DSH sidebar: every session combined p
 task, with a per-session breakdown and per-turn preview on hover. Cost comes from an editable
 price table; the plugin adds no model calls, prompts or tools.
 
-[![version](https://img.shields.io/badge/version-2.4.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.5.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## What it does
@@ -62,6 +62,7 @@ Then hover the sidebar badge to see the breakdown.
 - **Missing projections are backfilled:** for old/cold sessions without a `tokenUsage` projection, the panel asks `/token-cost/session-usage`, which sums provider-reported usage straight from the session log and returns the model name too.
 - No model requests are added: the plugin only reads local Host projections.
 - **Price table auto-updates:** `pricing.json` in the repo root is fetched every 24 h (cached); changing it updates every user without a plugin release.
+- **Host-side local total:** cumulative local spend is computed by the Host from every session log (not from loaded projections), so it stays correct on a cold start.
 - **Ledger groups:** credit (recharged / gifted / total), spend (official / local / gap), balance (official / estimated), book (last check / status / backups).
 - **Ledger panel:** total credit (recharge + gifts), official spend, local estimate, gap, official balance and estimated balance, with a daily ledger backup under `$DSH_HOME/token-cost/backups/`.
 - **Official cumulative reconciliation:** with credentials access the panel reads `get_user_summary` (`total_costs`) and shows official cumulative spend vs the local estimate — one read, no snapshot pair needed.

@@ -289,6 +289,55 @@ assertEqual('返回账本备份信息（供面板显示备份与校对）', type
 assert('每日账本备份文件已生成', fs.readdirSync(path.join(HOME, 'token-cost', 'backups')).some((name) => name.startsWith('ledger-')))
 assert('平台快照写进了账本（含官方累计花费）', JSON.parse(fs.readFileSync(path.join(HOME, 'token-cost', 'ledger.json'), 'utf8')).snapshots.some((s) => typeof s.officialTotalCost === 'number'))
 
+
+// ── Host 侧本机累计花费：直接扫会话日志（不依赖客户端投影加载状态）──────
+const sessionsDir = path.join(HOME, 'sessions', '--D-bucket--', 'session-test-1')
+fs.mkdirSync(sessionsDir, { recursive: true })
+const zstd = await import('node:zlib')
+const logLines = [
+  JSON.stringify({ type: 'request/header', time: 1, data: { header: { config: { model: 'deepseek-flash' } } } }),
+  JSON.stringify({
+    type: 'assistant/message',
+    time: Date.parse('2026-11-09T02:00:00Z'),
+    data: { usage: { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 } },
+  }),
+].join('\n')
+fs.writeFileSync(path.join(sessionsDir, 'session.v4.jsonl.zstd'), zstd.zstdCompressSync(Buffer.from(logLines + '\n')))
+fetchImpl = async (url) => {
+  if (String(url).includes('get_user_summary')) {
+    return {
+      ok: true,
+      json: async () => ({
+        code: 0,
+        msg: '',
+        data: {
+          biz_code: 0,
+          biz_msg: '',
+          biz_data: {
+            normal_wallets: [{ currency: 'CNY', balance: '19.1158860800' }],
+            bonus_wallets: [{ currency: 'CNY', balance: '0' }],
+            total_costs: [{ currency: 'CNY', amount: '94.1760941200' }],
+          },
+        },
+      }),
+    }
+  }
+  return { ok: false, status: 500, json: async () => ({}) }
+}
+routes = new Map()
+apply(
+  {
+    get: () => undefined,
+    inject: (names, callback) =>
+      callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
+  },
+  { network: { balance: true }, balance: { readCredentials: true, rechargeTotal: 100 } },
+)
+mod.invalidateLocalTotalCache()
+const hostLocal = await call('/token-cost/balance?local=0')
+assertEqual('本机累计用 Host 扫日志的权威值（1M 高峰未缓存 = ¥2）', Number(hostLocal.body.local.toFixed(4)), 2)
+assertEqual('差额按权威本机累计算', Number(hostLocal.body.cumulativeGap.toFixed(3)), Number((2 - 94.17609412).toFixed(3)))
+
 fs.rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)
 process.exitCode = failed === 0 ? 0 : 1
