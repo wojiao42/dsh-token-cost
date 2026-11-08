@@ -1356,7 +1356,6 @@ window.__ModuleLoader__.load({
         return [
           line('spend', [
             { key: 'official', label: tr('ledgerOfficialSpend'), value: money(officialSpent) },
-            { key: 'local', label: tr('ledgerLocalSpend'), value: money(localSpent) },
             {
               key: 'gap',
               label: tr('ledgerGap'),
@@ -1428,7 +1427,7 @@ window.__ModuleLoader__.load({
                 totals.asOf > 0 ? h('span', null, tr('asOf') + ' ' + fmtClock(totals.asOf)) : null,
                 totals.decodeRate === null ? null : h('span', null, totals.decodeRate.toFixed(1) + ' tok/s'),
                 totals.avgTtft === null ? null : h('span', null, tr('ttft') + ' ' + fmtMs(totals.avgTtft)),
-                net !== null && net.enabled === true
+                ledgerLines.length === 0 && net !== null && net.enabled === true
                   ? h(
                       'span',
                       { className: 'tcs-net' },
@@ -1443,7 +1442,7 @@ window.__ModuleLoader__.load({
                 net !== null && net.ok === true && net.drift !== null && net.drift !== undefined
                   ? h('span', { className: 'tcs-net' }, tr('drift') + ' ' + fmtSigned(net.drift.gap))
                   : null,
-                net !== null && net.ok === true && typeof net.cumulativeGap === 'number'
+                ledgerLines.length === 0 && net !== null && net.ok === true && typeof net.cumulativeGap === 'number'
                   ? h(
                       'span',
                       { className: 'tcs-net', title: tr('officialTotal') + ' ' + fmtMoney(net.officialTotalCost) },
