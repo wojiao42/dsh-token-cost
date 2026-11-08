@@ -285,6 +285,8 @@ assertEqual('官方累计花费读出来了', Number(platformBalance.body.offici
 assertEqual('一次读取就能算累计偏差（本地 − 官方）', Number(platformBalance.body.cumulativeGap.toFixed(3)), -2.501)
 assertEqual('总额度 = 官方累计 + 充值余额 + 赠送余额', Number(platformBalance.body.totalCredit.toFixed(3)), 113.292)
 assertEqual('配置了充值总额就能拆出赠送', [platformBalance.body.rechargeTotal, Number((platformBalance.body.totalCredit - 100).toFixed(2))], [100, 13.29])
+assertEqual('返回账本备份信息（供面板显示备份与校对）', typeof platformBalance.body.ledgerBackupInfo?.count, 'number')
+assert('每日账本备份文件已生成', fs.readdirSync(path.join(HOME, 'token-cost', 'backups')).some((name) => name.startsWith('ledger-')))
 assert('平台快照写进了账本（含官方累计花费）', JSON.parse(fs.readFileSync(path.join(HOME, 'token-cost', 'ledger.json'), 'utf8')).snapshots.some((s) => typeof s.officialTotalCost === 'number'))
 
 fs.rmSync(HOME, { recursive: true, force: true })

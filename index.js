@@ -13,7 +13,7 @@
  * 走 `ctx.sessionQuery.readSession()`：活跃会话读 live 日志，冷会话读持久化日志，返回已验证的克隆事件。
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -292,6 +292,15 @@ async function balancePayload(config, localTotal) {
         officialTotalCost !== null && typeof platform.total === 'number'
           ? officialTotalCost + platform.total + (typeof platform.granted === 'number' ? platform.granted : 0)
           : null;
+      const backupInfo = (() => {
+        try {
+          const dir = join(stateDir(), 'backups');
+          const files = readdirSync(dir).filter((name) => name.startsWith('ledger-') && name.endsWith('.json')).sort();
+          return { count: files.length, last: files.length === 0 ? null : files[files.length - 1] };
+        } catch {
+          return { count: 0, last: null };
+        }
+      })();
       const ledgerFile = join(stateDir(), 'ledger.json');
       const ledger = readJson(ledgerFile) ?? { snapshots: [] };
       const entry = {
@@ -326,6 +335,7 @@ async function balancePayload(config, localTotal) {
             : null,
         cumulativeGap:
           local !== null && officialTotalCost !== null ? local - officialTotalCost : null,
+        ledgerBackupInfo: backupInfo,
       };
     }
   } catch {

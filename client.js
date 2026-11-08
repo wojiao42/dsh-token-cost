@@ -174,12 +174,24 @@ window.__ModuleLoader__.load({
       balance: '余额',
       drift: '对账差',
       granted: '赠送',
+      ledgerGroupCredit: '额度',
+      ledgerGroupSpend: '消耗',
+      ledgerGroupBalance: '余额',
+      ledgerGroupBook: '账本',
       ledgerTotalCredit: '总额度',
-      ledgerOfficialSpent: '官方已花',
-      ledgerLocalSpent: '本地预估',
-      ledgerGap: '偏差',
+      ledgerRechargeTotal: '充值合计',
+      ledgerGiftTotal: '赠送合计',
+      ledgerOfficialSpend: '官方累计消耗',
+      ledgerLocalSpend: '本机累计消耗',
+      ledgerGap: '双边差额',
       ledgerOfficialBalance: '官方余额',
-      ledgerEstimatedBalance: '预估余额',
+      ledgerEstimatedBalance: '本机预估余额',
+      ledgerCheckedAt: '最近校对',
+      ledgerStatus: '校对状态',
+      ledgerStatusOk: '正常',
+      ledgerStatusMinor: '轻微偏差',
+      ledgerStatusWarn: '偏差偏大',
+      ledgerBackup: '账本备份',
       ledgerRecharge: '充值',
       ledgerGift: '赠送',
       toppedUp: '充值',
@@ -225,12 +237,24 @@ window.__ModuleLoader__.load({
       balance: 'Balance',
       drift: 'Drift',
       granted: 'granted',
+      ledgerGroupCredit: 'Credit',
+      ledgerGroupSpend: 'Spend',
+      ledgerGroupBalance: 'Balance',
+      ledgerGroupBook: 'Ledger',
       ledgerTotalCredit: 'Total credit',
-      ledgerOfficialSpent: 'Official spend',
-      ledgerLocalSpent: 'Local estimate',
+      ledgerRechargeTotal: 'Recharged',
+      ledgerGiftTotal: 'Gifted',
+      ledgerOfficialSpend: 'Official spend',
+      ledgerLocalSpend: 'Local spend',
       ledgerGap: 'Gap',
       ledgerOfficialBalance: 'Official balance',
       ledgerEstimatedBalance: 'Estimated balance',
+      ledgerCheckedAt: 'Checked at',
+      ledgerStatus: 'Status',
+      ledgerStatusOk: 'OK',
+      ledgerStatusMinor: 'Minor drift',
+      ledgerStatusWarn: 'Large drift',
+      ledgerBackup: 'Backups',
       ledgerRecharge: 'Recharged',
       ledgerGift: 'Gifted',
       toppedUp: 'topped up',
@@ -290,6 +314,8 @@ window.__ModuleLoader__.load({
       '.tcs-meta{display:flex;flex-wrap:wrap;gap:4px 12px;padding-bottom:6px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary)}',
     '.tcs-ledger{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}',
     '.tcs-ledgerRow{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}',
+    '.tcs-ledgerGroup{display:flex;flex-direction:column;gap:2px}',
+    '.tcs-ledgerGroupTitle{color:var(--dsw-alias-label-tertiary);font-size:10px;letter-spacing:.04em;margin-top:2px}',
     '.tcs-ledgerKey{color:var(--dsw-alias-label-tertiary);min-width:76px}',
     '.tcs-ledgerVal{font-variant-numeric:tabular-nums}',
       '.tcs-list{display:flex;flex-direction:column;gap:1px;padding:4px 0}',
@@ -1286,46 +1312,90 @@ window.__ModuleLoader__.load({
         : undefined;
 
       const visible = summary.rows.filter((row) => row.billed > 0 || row.running);
-      // 账本：官方累计花费 / 本地预估 / 余额 / 预估余额（一次余额查询就能算出）
-      const ledgerRows = (() => {
+      // 账本：一次余额查询就能把「充值/赠送/双边消耗/差额/备份与校对」全部算出
+      const ledgerGroups = (() => {
         if (net === null || net.ok !== true) return [];
-        const rows = [];
-        const totalCredit = typeof net.totalCredit === 'number' ? net.totalCredit : null;
-        const officialSpent = typeof net.officialTotalCost === 'number' ? net.officialTotalCost : null;
-        const localSpent = typeof net.local === 'number' ? net.local : null;
-        const officialBalance = typeof net.total === 'number' ? net.total : null;
-        if (totalCredit !== null) rows.push({ key: 'credit', label: tr('ledgerTotalCredit'), value: fmtMoney(totalCredit) });
-        if (officialSpent !== null) rows.push({ key: 'official', label: tr('ledgerOfficialSpent'), value: fmtMoney(officialSpent) });
-        if (localSpent !== null) rows.push({ key: 'local', label: tr('ledgerLocalSpent'), value: fmtMoney(localSpent) });
-        if (typeof net.cumulativeGap === 'number') {
-          rows.push({
-            key: 'gap',
-            label: tr('ledgerGap'),
-            value: fmtSigned(net.cumulativeGap) + (officialSpent !== null && officialSpent > 0 ? '（' + ((net.cumulativeGap / officialSpent) * 100).toFixed(1) + '%）' : ''),
-          });
-        }
-        if (officialBalance !== null) {
-          const split =
-            typeof net.granted === 'number' && net.granted > 0
-              ? '（' + tr('ledgerRecharge') + ' ' + fmtMoney(net.toppedUp) + ' / ' + tr('ledgerGift') + ' ' + fmtMoney(net.granted) + '）'
-              : '';
-          rows.push({ key: 'balance', label: tr('ledgerOfficialBalance'), value: fmtMoney(officialBalance) + split });
-        }
-        if (totalCredit !== null && localSpent !== null) {
-          const estimated = totalCredit - localSpent;
-          const recharge = typeof net.rechargeTotal === 'number' ? net.rechargeTotal : null;
-          const gift = recharge !== null ? totalCredit - recharge : null;
-          rows.push({
-            key: 'estimated',
-            label: tr('ledgerEstimatedBalance'),
-            value:
-              fmtMoney(estimated) +
-              (recharge !== null && gift !== null
-                ? '（' + tr('ledgerRecharge') + ' ' + fmtMoney(recharge) + ' / ' + tr('ledgerGift') + ' ' + fmtMoney(gift) + '）'
-                : ''),
-          });
-        }
-        return rows;
+        const money = (value) => (typeof value === 'number' ? fmtMoney(value) : '—')
+        const totalCredit = typeof net.totalCredit === 'number' ? net.totalCredit : null
+        const officialSpent = typeof net.officialTotalCost === 'number' ? net.officialTotalCost : null
+        const localSpent = typeof net.local === 'number' ? net.local : null
+        const officialBalance = typeof net.total === 'number' ? net.total : null
+        const recharge = typeof net.rechargeTotal === 'number' ? net.rechargeTotal : null
+        const gift = recharge !== null && totalCredit !== null ? totalCredit - recharge : null
+        const groups = [
+          {
+            title: tr('ledgerGroupCredit'),
+            rows: [
+              { key: 'recharge', label: tr('ledgerRechargeTotal'), value: money(recharge) },
+              { key: 'gift', label: tr('ledgerGiftTotal'), value: money(gift) },
+              { key: 'credit', label: tr('ledgerTotalCredit'), value: money(totalCredit) },
+            ],
+          },
+          {
+            title: tr('ledgerGroupSpend'),
+            rows: [
+              { key: 'official', label: tr('ledgerOfficialSpend'), value: money(officialSpent) },
+              { key: 'local', label: tr('ledgerLocalSpend'), value: money(localSpent) },
+              {
+                key: 'gap',
+                label: tr('ledgerGap'),
+                value:
+                  typeof net.cumulativeGap === 'number'
+                    ? fmtSigned(net.cumulativeGap) +
+                      (officialSpent !== null && officialSpent > 0
+                        ? '（' + ((net.cumulativeGap / officialSpent) * 100).toFixed(1) + '%）'
+                        : '')
+                    : '—',
+              },
+            ],
+          },
+          {
+            title: tr('ledgerGroupBalance'),
+            rows: [
+              {
+                key: 'officialBalance',
+                label: tr('ledgerOfficialBalance'),
+                value:
+                  money(officialBalance) +
+                  (typeof net.granted === 'number' && net.granted > 0
+                    ? '（' + tr('ledgerGift') + ' ' + money(net.granted) + '）'
+                    : ''),
+              },
+              {
+                key: 'estimatedBalance',
+                label: tr('ledgerEstimatedBalance'),
+                value: totalCredit !== null && localSpent !== null ? money(totalCredit - localSpent) : '—',
+              },
+            ],
+          },
+          {
+            title: tr('ledgerGroupBook'),
+            rows: [
+              { key: 'checkedAt', label: tr('ledgerCheckedAt'), value: typeof net.at === 'number' ? fmtClock(net.at) : '—' },
+              {
+                key: 'status',
+                label: tr('ledgerStatus'),
+                value:
+                  officialSpent !== null && officialSpent > 0 && typeof net.cumulativeGap === 'number'
+                    ? Math.abs(net.cumulativeGap) / officialSpent <= 0.02
+                      ? tr('ledgerStatusOk')
+                      : Math.abs(net.cumulativeGap) / officialSpent <= 0.05
+                        ? tr('ledgerStatusMinor') + '（' + ((Math.abs(net.cumulativeGap) / officialSpent) * 100).toFixed(1) + '%）'
+                        : tr('ledgerStatusWarn') + '（' + ((Math.abs(net.cumulativeGap) / officialSpent) * 100).toFixed(1) + '%）'
+                    : '—',
+              },
+              {
+                key: 'backup',
+                label: tr('ledgerBackup'),
+                value:
+                  net.ledgerBackupInfo !== undefined && net.ledgerBackupInfo !== null
+                    ? String(net.ledgerBackupInfo.count) + ' 份' + (net.ledgerBackupInfo.last === null ? '' : ' · ' + net.ledgerBackupInfo.last)
+                    : '—',
+              },
+            ],
+          },
+        ];
+        return groups
       })();
 
       const panel = open
@@ -1392,17 +1462,24 @@ window.__ModuleLoader__.load({
                     )
                   : null,
               ),
-              ledgerRows.length === 0
+              ledgerGroups.length === 0
                 ? null
                 : h(
                     'div',
                     { className: 'tcs-ledger' },
-                    ledgerRows.map((entry) =>
+                    ledgerGroups.map((group) =>
                       h(
                         'div',
-                        { className: 'tcs-ledgerRow', key: entry.key },
-                        h('span', { className: 'tcs-ledgerKey' }, entry.label),
-                        h('span', { className: 'tcs-ledgerVal' }, entry.value),
+                        { className: 'tcs-ledgerGroup', key: group.title },
+                        h('div', { className: 'tcs-ledgerGroupTitle' }, group.title),
+                        group.rows.map((entry) =>
+                          h(
+                            'div',
+                            { className: 'tcs-ledgerRow', key: entry.key },
+                            h('span', { className: 'tcs-ledgerKey' }, entry.label),
+                            h('span', { className: 'tcs-ledgerVal' }, entry.value),
+                          ),
+                        ),
                       ),
                     ),
                   ),
