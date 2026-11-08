@@ -368,6 +368,28 @@ assertEqual('turnView marks an unpriced model with a dash',
   turnView({ turn: 5, startTime: 1000, endTime: 2000, steps: 1, closed: true, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, null, '进行中').amount,
   '—');
 
+
+// --- 投影缺失时的兜底合并（历史会话不再显示横线）
+{
+  const { aggregateSessions } = plugin.__internals;
+  const bare = {
+    ids: ['x'],
+    byId: { x: { id: 'x', displayTitle: '历史会话', running: false, updatedAt: at('2026-11-09T04:30:00Z') } },
+    projectionsBySession: {},
+  };
+  const filled = aggregateSessions(bare, { x: { usage: { uncachedInputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 500 }, model: 'deepseek-flash' } });
+  assertEqual('没有投影时用兜底数据算费用', [filled.rows[0].billed, filled.rows[0].cost === null, filled.rows[0].model], [1500, false, 'deepseek-flash']);
+  const empty = aggregateSessions(bare, {});
+  assertEqual('没有兜底数据时仍保持未知（不瞎猜）', [empty.rows[0].billed, empty.rows[0].cost === null], [0, true]);
+  const withUsage = {
+    ids: ['y'],
+    byId: { y: { id: 'y', displayTitle: '有量无模型', running: false, updatedAt: at('2026-11-09T04:30:00Z'), projectionValues: { tokenUsage: { uncachedInputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 5 } } } },
+    projectionsBySession: {},
+  };
+  const patched = aggregateSessions(withUsage, { y: { usage: { uncachedInputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 5 }, model: 'deepseek-flash' } });
+  assertEqual('有 token 但缺模型时补上模型', [patched.rows[0].model, patched.rows[0].cost === null], ['deepseek-flash', false]);
+}
+
 (async () => {
   const urls = [];
   globalThis.fetch = (url) => {

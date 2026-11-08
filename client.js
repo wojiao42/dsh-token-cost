@@ -410,14 +410,33 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /** 兜底取数的缓存：sessionId → { at, payload }（投影缺失的历史会话用）。 */
+    const sessionFillCache = new Map();
+    const SESSION_FILL_TTL_MS = 60_000;
+
     /**
      * Fold every known session's cached projections into one summary.
      * Running sessions sort first, then by estimated cost.
+     * fills 是投影缺失时的兜底数据（Host 直接从日志折出来的总量/模型）。
      */
-    function aggregateSessions(list) {
+    function aggregateSessions(list, fills) {
       const rows = [];
       const seen = new Set();
-      const add = (id, row, values) => {
+      const add = (id, row, rawValues) => {
+        let values = rawValues;
+        const fill = fills === undefined ? undefined : fills[id];
+        if (fill !== undefined && fill !== null) {
+          const hasUsage = values?.tokenUsage !== undefined;
+          const hasModel = modelOf(values?.modelSelection) !== null;
+          if (!hasUsage) {
+            values = {
+              tokenUsage: fill.usage,
+              modelSelection: fill.model === null || fill.model === undefined ? undefined : { lastUsed: { model: fill.model } },
+            };
+          } else if (!hasModel && fill.model !== null && fill.model !== undefined) {
+            values = { ...values, modelSelection: { lastUsed: { model: fill.model } } };
+          }
+        }
         seen.add(id);
         rows.push({
           id,
@@ -879,8 +898,9 @@ window.__ModuleLoader__.load({
 
     function TokenCostSummary({ useSessions, t, openSession, warmProjections, sessionsSource, loadOlder, wide = true }) {
       const sessions = useSessionsSnapshot(sessionsSource, useSessions);
-      const summary = React.useMemo(() => aggregateSessions(sessions), [sessions]);
       const [open, setOpen] = React.useState(false);
+      const [fills, setFills] = React.useState({});
+      const summary = React.useMemo(() => aggregateSessions(sessions, fills), [sessions, fills]);
       const [position, setPosition] = React.useState(null);
       const rootRef = React.useRef(null);
       const warmRef = React.useRef(warmProjections);
@@ -890,6 +910,46 @@ window.__ModuleLoader__.load({
       // Host 的控制基线只覆盖当前活跃 Session，后台任务的会话是冷的：它们没有
       // tokenUsage。对缺数据的会话逐个取证（先运行中的，再最近更新的），
       // 数量有上限；面板里的「载入其余会话」会取消上限重试一遍。
+      // 投影缺失的会话（冷会话 / 历史会话 / 投影缓存被清掉）直接问 Host 从日志折总量，
+      // 否则面板上它们 token 是 0、费用是「—」——「历史用量全是横线」就是这么来的。
+      React.useEffect(() => {
+        const ids = Array.isArray(sessions?.ids) ? sessions.ids : [];
+        const missing = [];
+        for (const id of ids) {
+          const row = sessions?.byId?.[id];
+          const values = row?.projectionValues ?? sessions?.projectionsBySession?.[id]?.values;
+          const needsUsage = values?.tokenUsage === undefined;
+          const needsModel = modelOf(values?.modelSelection) === null;
+          if (!needsUsage && !needsModel) continue;
+          const cached = sessionFillCache.get(id);
+          if (cached !== undefined && Date.now() - cached.at < SESSION_FILL_TTL_MS) continue;
+          missing.push(id);
+        }
+        if (missing.length === 0 || typeof fetch !== 'function') return undefined;
+        let cancelled = false;
+        let cursor = 0;
+        const worker = async () => {
+          while (!cancelled) {
+            const id = missing[cursor];
+            cursor += 1;
+            if (id === undefined) return;
+            try {
+              const response = await fetch('/token-cost/session-usage?sessionId=' + encodeURIComponent(id));
+              if (!response.ok) continue;
+              const payload = await response.json();
+              sessionFillCache.set(id, { at: Date.now(), payload });
+              if (!cancelled) setFills((previous) => ({ ...previous, [id]: payload }));
+            } catch {
+              /* 单条失败不影响其它会话 */
+            }
+          }
+        };
+        for (let i = 0; i < 4; i += 1) void worker();
+        return () => {
+          cancelled = true;
+        };
+      }, [sessions]);
+
       React.useEffect(() => {
         if (typeof warmRef.current !== 'function') return undefined;
         const ids = Array.isArray(sessions?.ids) ? sessions.ids : [];
@@ -1420,7 +1480,7 @@ window.__ModuleLoader__.load({
       name: 'token-cost',
       inject,
       apply,
-      __internals: { turnView, costOf, priceTierAt, resolvePrice, PRICES, refreshPricing, fmtSigned },
+      __internals: { turnView, costOf, priceTierAt, resolvePrice, PRICES, refreshPricing, fmtSigned, aggregateSessions },
     };
   },
 });

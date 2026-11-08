@@ -24,6 +24,9 @@ const MAX_LIMIT = 200;
 /** 同一会话的折叠结果缓存时长：避免鼠标扫过时反复读日志。 */
 const CACHE_TTL_MS = 15_000;
 
+/** 会话总用量兜底查询的缓存（见 sessionUsagePayload）。 */
+const usageCache = new Map();
+
 /** 计价规则与官方余额对账（都需要联网，默认关闭，由配置里的 network 打开）。 */
 const PRICING_URL_DEFAULT = 'https://raw.githubusercontent.com/wojiao42/dsh-token-cost/main/pricing.json';
 const BALANCE_URL = 'https://api.deepseek.com/user/balance';
@@ -131,6 +134,50 @@ async function pricingDoc(config, { force = false } = {}) {
       error: String(error?.message ?? error),
     };
   }
+}
+
+/**
+ * 某会话的总用量与模型：投影缺失（冷会话 / 历史会话 / 投影缓存被清）时由客户端兜底调用。
+ * 直接读日志事件累加 provider 上报的 usage，不走投影，所以只要日志还在就一定算得出来。
+ */
+async function sessionUsagePayload(ctx, config, sessionId) {
+  const cache = usageCache;
+  const cached = cache.get(sessionId);
+  if (cached !== undefined && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload;
+  const query = ctx.get('sessionQuery');
+  if (query === undefined || typeof query.readSession !== 'function') throw new Error('sessionQuery unavailable');
+  const { events } = await query.readSession(sessionId);
+  const usage = { uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 };
+  let model = null;
+  let lastAt = null;
+  let firstAt = null;
+  for (const event of events ?? []) {
+    if (event === null || typeof event !== 'object') continue;
+    if (typeof event.time === 'number') {
+      if (firstAt === null || event.time < firstAt) firstAt = event.time;
+      if (lastAt === null || event.time > lastAt) lastAt = event.time;
+    }
+    if (event.type === 'assistant/message' && event.data !== undefined && event.data !== null) {
+      const reported = event.data.usage;
+      if (reported !== null && typeof reported === 'object') {
+        usage.uncachedInputTokens += asFinite(reported.inputTokens ?? reported.uncachedInputTokens);
+        usage.cacheReadTokens += asFinite(reported.cacheReadTokens);
+        usage.cacheWriteTokens += asFinite(reported.cacheWriteTokens);
+        usage.outputTokens += asFinite(reported.outputTokens);
+      }
+    }
+    if (event.type === 'request/header') {
+      const candidate = event.data?.header?.config?.model;
+      if (typeof candidate === 'string' && candidate !== '') model = candidate;
+    }
+  }
+  const payload = { sessionId, usage, model, firstAt, lastAt };
+  cache.set(sessionId, { at: Date.now(), payload });
+  return payload;
+}
+
+function asFinite(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 /** 找 API key：显式配置 → 环境变量 → （仅在允许时）DSH 凭据库里的 refs.DEEPSEEK_API_KEY。 */
@@ -410,6 +457,7 @@ export function apply(ctx, config = {}) {
   /** sessionId → { at, payload }：短缓存，鼠标扫过面板时不重复读日志。 */
   const cache = new Map();
 
+
   async function turnsPayload(sessionId, limit, refresh) {
     const cached = cache.get(sessionId);
     if (refresh !== true && cached !== undefined && Date.now() - cached.at < CACHE_TTL_MS) return cached.payload;
@@ -567,6 +615,39 @@ export function apply(ctx, config = {}) {
           },
         }),
       'token-cost: balance route',
+    );
+
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: '/token-cost/session-usage',
+          handler: async (request, response) => {
+            if (request.method !== 'GET' && request.method !== 'HEAD') {
+              response.writeHead(405, { allow: 'GET, HEAD' });
+              response.end();
+              return;
+            }
+            const url = new URL(request.url ?? '/', 'http://localhost');
+            const sessionId = url.searchParams.get('sessionId') ?? '';
+            if (sessionId === '') {
+              sendJson(response, 400, { error: 'sessionId is required' });
+              return;
+            }
+            try {
+              const payload = await sessionUsagePayload(ctx, config, sessionId);
+              if (request.method === 'HEAD') {
+                response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+                response.end();
+                return;
+              }
+              sendJson(response, 200, payload);
+            } catch (error) {
+              sendJson(response, 404, { error: String(error?.message ?? error) });
+            }
+          },
+        }),
+      'token-cost: session usage route',
     );
   });
 }

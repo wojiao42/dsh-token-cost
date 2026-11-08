@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.0.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -75,6 +75,12 @@
 - 差多少：`+` 表示本地多算，`−` 表示本地少算
 
 余额要联网才查（默认关闭，见「口径与安全设计 › 联网与凭据」）；只有一次快照时不显示对账差。
+
+### 投影缺失时的兜底
+
+侧栏列表里的会话用量来自 Host 的投影缓存。历史会话、冷会话、或投影缓存被清掉之后，这些会话没有 `tokenUsage` 投影 —— 面板上就会出现「token 0 / 费用 —」的横线。
+
+现在面板会对这类会话逐个问 Host 的 `GET /token-cost/session-usage?sessionId=…`：Host 直接读该会话日志里 `assistant/message` 上报的 `usage` 累加（和逐轮预览同一套数据源），顺便把模型名带回来，所以费用也能算。取数并发 4、结果缓存 60 秒；拿不到就仍然显示横线，不猜。
 
 ## 口径与安全设计
 
@@ -276,6 +282,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。版本号取自各提交里的 `package.json`，日期是 git 提交日期。
+
+- **v2.0.1**（2026-11-08）：投影缺失的历史/冷会话不再显示「token 0 / 费用 —」—— 面板改问 Host 的 `/token-cost/session-usage`，由 Host 直接从会话日志里累加 provider 上报的 usage 并带回模型名（并发 4、缓存 60s，取不到就不显示）。
 
 - **v2.0.0**（2026-11-08）：新增两件联网能力（默认关闭）—— ① **计价规则自动更新**：价目表抽成仓库根的 `pricing.json`，Host 每 24h 拉一次并缓存，官方调价后不用等发版；② **官方余额对账**：面板显示官方余额与「本地估算 vs 官方扣费」的偏差，账本落在 `$DSH_HOME/token-cost/ledger.json`。API key 查找顺序：配置 → 环境变量 → （显式允许时）DSH 凭据库。新增路由 `/token-cost/pricing`、`/token-cost/balance`。
 

@@ -105,7 +105,7 @@ apply(
   { network: { pricing: true, balance: true }, balance: { readCredentials: true } },
 )
 
-assertEqual('注册了三条路由', [...routes.keys()].sort(), ['/token-cost/balance', '/token-cost/pricing', '/token-cost/turns'])
+assertEqual('注册了四条路由', [...routes.keys()].sort(), ['/token-cost/balance', '/token-cost/pricing', '/token-cost/session-usage', '/token-cost/turns'])
 
 // 计价：远程成功
 fetchImpl = async () => ({
@@ -166,6 +166,42 @@ balance = await call('/token-cost/balance?local=1')
 assertEqual('网络关掉时计价退回内置表', [pricing.body.source, pricing.body.doc.updatedAt], ['cache', '2026-12-01T00:00:00Z'])
 assertEqual('网络关掉时余额返回 enabled:false', balance.body.enabled, false)
 assertEqual('网络关掉时一次都没联网', fetchCalls.length, callsBeforeOffline)
+
+
+// ── 会话总用量兜底（投影缺失的历史会话）───────────────────────
+routes = new Map()
+const events = [
+  { type: 'request/header', time: 10, data: { header: { config: { model: 'deepseek-flash' } } } },
+  { type: 'assistant/message', time: 20, data: { usage: { inputTokens: 1000, cacheReadTokens: 9000, cacheWriteTokens: 0, outputTokens: 500 } } },
+  { type: 'assistant/message', time: 30, data: { usage: { inputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 100, outputTokens: 50 } } },
+]
+const sessionQueryStub = {
+  async readSession(sessionId) {
+    if (sessionId === 'bad') throw new Error('SESSION_NOT_FOUND')
+    return { events }
+  },
+}
+apply(
+  {
+    get: (name) => (name === 'sessionQuery' ? sessionQueryStub : undefined),
+    inject: (names, callback) =>
+      callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
+  },
+  {},
+)
+assertEqual('注册了第四条路由', routes.has('/token-cost/session-usage'), true)
+let usage = await call('/token-cost/session-usage?sessionId=a')
+assertEqual('兜底用量按 provider 上报累加', usage.body.usage, {
+  uncachedInputTokens: 1200,
+  cacheReadTokens: 9000,
+  cacheWriteTokens: 100,
+  outputTokens: 550,
+})
+assertEqual('兜底同时给出模型与时间范围', [usage.body.model, usage.body.firstAt, usage.body.lastAt], ['deepseek-flash', 10, 30])
+assertEqual('缺 sessionId 报 400', (await call('/token-cost/session-usage')).status, 400)
+assertEqual('读不到会话报 404', (await call('/token-cost/session-usage?sessionId=bad')).status, 404)
+const cachedUsage = await call('/token-cost/session-usage?sessionId=a')
+assertEqual('兜底结果有短缓存（同一会话再问一次仍成功）', cachedUsage.status, 200)
 
 fs.rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)
