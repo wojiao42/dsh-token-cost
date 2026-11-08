@@ -69,9 +69,10 @@ window.__ModuleLoader__.load({
         const doc = payload?.doc;
         if (doc === null || typeof doc !== 'object' || doc.models === null || typeof doc.models !== 'object') return;
         for (const [model, tiers] of Object.entries(doc.models)) {
-          if (tiers !== null && typeof tiers === 'object' && tiers.idle !== undefined && tiers.peak !== undefined) {
-            PRICES[model] = tiers;
-          }
+          const usable = Array.isArray(tiers)
+            ? tiers.length > 0 && tiers.every((version) => version !== null && typeof version === 'object' && version.idle !== undefined && version.peak !== undefined)
+            : tiers !== null && typeof tiers === 'object' && tiers.idle !== undefined && tiers.peak !== undefined;
+          if (usable) PRICES[model] = tiers;
         }
         const rule = doc.peakRule;
         if (rule !== null && typeof rule === 'object' && typeof rule.timeZone === 'string' && Array.isArray(rule.ranges)) {
@@ -88,12 +89,43 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 价格表同时接受 {idle,peak} 分档与旧的扁平写法（离线测试与自定义价格用扁平）。 */
+    /**
+     * 价格表接受三种写法：
+     *   · 版本数组 [{from,to,idle,peak}, …] —— 按调用时刻选生效版本；
+     *   · {idle,peak} 分档；
+     *   · 扁平表（离线测试与自定义价格用）。
+     */
     function resolvePrice(price, atMs) {
       if (price === null || price === undefined) return null;
+      if (Array.isArray(price)) {
+        const versions = price
+          .filter((version) => version !== null && typeof version === 'object')
+          .map((version) => ({
+            ...version,
+            from: parseTime(version.from, -Infinity),
+            to: parseTime(version.to, Infinity),
+          }))
+          .sort((left, right) => left.from - right.from);
+        if (versions.length === 0) return null;
+        const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+        const hit =
+          versions.find((version) => at >= version.from && at < version.to) ??
+          (at < versions[0].from ? versions[0] : versions[versions.length - 1]);
+        return hit === undefined ? null : resolvePrice(hit, at);
+      }
       if (typeof price.cacheMiss === 'number') return price;
       const tier = priceTierAt(atMs);
       return price[tier] === undefined ? null : price[tier];
+    }
+
+    /** 版本时间归一化：毫秒数字或日期字符串；缺省取 fallback。 */
+    function parseTime(value, fallback) {
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+      if (typeof value === 'string' && value !== '') {
+        const parsed = Date.parse(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      }
+      return fallback;
     }
 
     const EMPTY = {
