@@ -233,7 +233,7 @@ assert('panel is portalled to document.body', portals.length === 1 && portals[0]
 assert('panel head shows estimate', byClass('tcs-headValue')[0].text === '≈¥0.0167');
 const meta = byClass('tcs-meta')[0].node.children.filter((child) => child !== null).map((child) => child.children.join(''));
 const rows = byClass('tcs-row');
-assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '≤50.0%']);
+assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '最大占比 ≤50.0%']);
 assert('the as-of clock lives in the panel meta line', meta.some((line) => /截至 \d{2}:\d{2}/.test(line)));
 assertEqual('meta line adds as-of / decode rate / ttft',
   meta.slice(4).map((line) => line.replace(/\d{2}:\d{2}/, 'HH:MM')),
