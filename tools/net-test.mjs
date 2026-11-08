@@ -37,15 +37,23 @@ assertEqual('兜底表 flash 空闲价', EMBEDDED_PRICING.models['deepseek-flash
 assertEqual('兜底表 flash 高峰价', EMBEDDED_PRICING.models['deepseek-flash'].peak, { cacheHit: 0.04, cacheMiss: 2, output: 8 })
 
 // ── 对账口径 ─────────────────────────────────────────────────
-assertEqual('样本不足时不给对账', driftOf([{ at: 1, total: 100, local: 0 }]), null)
+assertEqual('样本不足时不给对账', driftOf([{ at: 1, total: 100, local: 0, algo: 'x' }]), null)
 const drift = driftOf([
+  { at: 1000, total: 100, local: 10, algo: 'x' },
+  { at: 2000, total: 96, local: 14, algo: 'x' },
+])
+assertEqual('跨算法（本地估算量纲变了）不给对账', driftOf([
+  { at: 1000, total: 100, local: 10, algo: 'old' },
+  { at: 2000, total: 96, local: 14, algo: 'new' },
+]), null)
+assertEqual('没有 algo 的老快照不参与对账', driftOf([
   { at: 1000, total: 100, local: 10 },
   { at: 2000, total: 96, local: 14 },
-])
+]), null)
 assertEqual('官方花了 4、本地算 4 → gap 0', [drift.spentOfficial, drift.spentLocal, drift.gap], [4, 4, 0])
 const drift2 = driftOf([
-  { at: 1000, total: 100, local: 10 },
-  { at: 2000, total: 96, local: 12 },
+  { at: 1000, total: 100, local: 10, algo: 'x' },
+  { at: 2000, total: 96, local: 12, algo: 'x' },
 ])
 assertEqual('本地少算 → gap 为负', drift2.gap, -2)
 
@@ -140,6 +148,8 @@ let balance = await call('/token-cost/balance?local=10')
 assertEqual('余额读到了', [balance.status, balance.body.ok, balance.body.total, balance.body.currency], [200, true, 25.2, 'CNY'])
 assertEqual('key 来源是凭据库', balance.body.keySource, 'credentials')
 assert('账本落盘', fs.existsSync(path.join(HOME, 'token-cost', 'ledger.json')))
+const ledgerFile = JSON.parse(fs.readFileSync(path.join(HOME, 'token-cost', 'ledger.json'), 'utf8'))
+assert('账本快照带算法标记（跨算法不对账）', typeof ledgerFile.snapshots?.[0]?.algo === 'string')
 
 // 余额：1 分钟内同 local 走缓存
 const callsBeforeCache = fetchCalls.length

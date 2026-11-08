@@ -9,7 +9,7 @@ Live token usage and estimated cost in the DSH sidebar: every session combined p
 task, with a per-session breakdown and per-turn preview on hover. Cost comes from an editable
 price table; the plugin adds no model calls, prompts or tools.
 
-[![version](https://img.shields.io/badge/version-2.1.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.1.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## What it does

@@ -37,6 +37,12 @@ const BALANCE_URL = 'https://api.deepseek.com/user/balance';
 const PRICING_TTL_MS = 24 * 60 * 60 * 1000;
 const BALANCE_TTL_MS = 60 * 1000;
 const SNAPSHOT_MIN_GAP_MS = 30 * 60 * 1000;
+/**
+ * 本地估算值的算法版本。算法一变（例如 v2.0 的近似 → v2.1 的逐事件定价），
+ * 「本地累计」的量纲就变了，跨算法的两个快照相减没有任何意义，所以对账只在
+ * 同一算法的快照之间算。
+ */
+const LEDGER_ALGO = 'event-priced-v1';
 const MAX_SNAPSHOTS = 500;
 const NET_TIMEOUT_MS = 8000;
 
@@ -240,6 +246,7 @@ async function balancePayload(config, localTotal) {
       granted: info === undefined ? null : Number(info.granted_balance),
       toppedUp: info === undefined ? null : Number(info.topped_up_balance),
       local: typeof localTotal === 'number' && Number.isFinite(localTotal) ? localTotal : null,
+      algo: LEDGER_ALGO,
       available: body?.is_available === true,
     };
     const previous = ledger.snapshots[ledger.snapshots.length - 1];
@@ -268,13 +275,16 @@ async function balancePayload(config, localTotal) {
 
 /** 对账：官方余额下降多少 vs 本地估算增加多少。gap > 0 表示本地多算。 */
 export function driftOf(snapshots) {
-  const usable = (snapshots ?? []).filter(
+  const all = (snapshots ?? []).filter(
     (entry) =>
       entry !== null &&
       typeof entry === 'object' &&
       typeof entry.total === 'number' &&
       typeof entry.local === 'number',
   );
+  // 只跟同一算法的快照比：算法变了（量纲变了），跨算法相减得到的是假差额。
+  const algo = all.length === 0 ? undefined : all[all.length - 1].algo;
+  const usable = algo === undefined ? [] : all.filter((entry) => entry.algo === algo);
   if (usable.length < 2) return null;
   const first = usable[0];
   const last = usable[usable.length - 1];
@@ -284,6 +294,7 @@ export function driftOf(snapshots) {
     since: first.at,
     until: last.at,
     samples: usable.length,
+    algo,
     balanceFrom: first.total,
     balanceTo: last.total,
     localFrom: first.local,
