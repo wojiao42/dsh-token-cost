@@ -42,7 +42,11 @@ const COST_TTL_MS = 10 * 60 * 1000;
 /** 计价规则与官方余额对账（都需要联网，默认关闭，由配置里的 network 打开）。 */
 const PRICING_URL_DEFAULT = 'https://raw.githubusercontent.com/wojiao42/dsh-token-cost/main/pricing.json';
 const BALANCE_URL = 'https://api.deepseek.com/user/balance';
-const PRICING_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * 价目表刷新周期。官方调价极少（近年几个月一次），没必要天天拉；7 天足够在调价后一周内跟上。
+ * 可用 profile 的 network.pricingRefreshHours 覆盖。
+ */
+const PRICING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const BALANCE_TTL_MS = 60 * 1000;
 const SNAPSHOT_MIN_GAP_MS = 30 * 60 * 1000;
 /**
@@ -61,7 +65,14 @@ export const EMBEDDED_PRICING = {
   source: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/',
   currency: 'CNY',
   unit: 'per_million_tokens',
-  peakRule: { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[9, 12], [14, 18]] },
+  peakRule: {
+    timeZone: 'Asia/Shanghai',
+    weekdays: [1, 2, 3, 4, 5],
+    ranges: [[9, 12], [14, 18]],
+    holidays: [],
+  },
+  perRequest: { currency: 'CNY', unit: 1000, api: { web_search: 5, web_fetch: 5 } },
+  refreshHours: 168,
   models: {
     'deepseek-flash': {
       idle: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
@@ -73,6 +84,13 @@ export const EMBEDDED_PRICING = {
     },
   },
 };
+
+/** 价目表刷新周期：默认 7 天，可用 profile 的 network.pricingRefreshHours 覆盖。 */
+function pricingTtlMs(config) {
+  const hours = config?.network?.pricingRefreshHours;
+  if (typeof hours === 'number' && Number.isFinite(hours) && hours > 0) return hours * 60 * 60 * 1000;
+  return PRICING_TTL_MS;
+}
 
 function stateDir() {
   const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
@@ -127,7 +145,9 @@ async function pricingDoc(config, { force = false } = {}) {
   const cached = readJson(file);
   const online = config?.network?.pricing === true;
   const fresh =
-    cached !== undefined && typeof cached.fetchedAt === 'number' && Date.now() - cached.fetchedAt < PRICING_TTL_MS;
+    cached !== undefined &&
+  typeof cached.fetchedAt === 'number' &&
+  Date.now() - cached.fetchedAt < pricingTtlMs(config);
   if (fresh && force !== true) return { doc: cached.doc, source: 'cache', fetchedAt: cached.fetchedAt };
   if (!online) {
     const fallback = cached?.doc ?? EMBEDDED_PRICING;
@@ -274,11 +294,17 @@ async function localTotalPayload(config) {
         }
         let model = 'deepseek-flash';
         let sessionCost = 0;
+        const calls = {};
         for (const event of events) {
           if (event === null || typeof event !== 'object') continue;
           if (event.type === 'request/header') {
             const candidate = event.data?.header?.config?.model;
             if (typeof candidate === 'string' && candidate !== '') model = candidate;
+            continue;
+          }
+          if (event.type === 'tool/call') {
+            const tool = event.data?.name;
+            if (typeof tool === 'string' && tool !== '') calls[tool] = (calls[tool] ?? 0) + 1;
             continue;
           }
           if (event.type !== 'assistant/message') continue;
@@ -297,6 +323,7 @@ async function localTotalPayload(config) {
             if (lastAt === null || event.time > lastAt) lastAt = event.time;
           }
         }
+        sessionCost += perRequestFee(doc, calls);
         if (sessionCost > 0) {
           total += sessionCost;
           sessions += 1;
@@ -726,6 +753,20 @@ function sendJson(response, status, body) {
  *
  * route: GET /token-cost/costs?ids=id1,id2,...  （一次最多 40 个）
  */
+/** Search / Fetch 这类按次计费的 API（5 元 / 1000 次），官方不和 token 一起算。 */
+function perRequestFee(doc, calls) {
+  const rule = doc?.perRequest
+  if (rule === null || rule === undefined || typeof rule !== 'object') return 0
+  const unit = typeof rule.unit === 'number' && rule.unit > 0 ? rule.unit : 1000
+  const api = rule.api ?? {}
+  let fee = 0
+  for (const [name, count] of Object.entries(calls)) {
+    const price = api[name]
+    if (typeof price === 'number' && price > 0) fee += (count / unit) * price
+  }
+  return fee
+}
+
 async function sessionCostPayload(ctx, config, sessionId) {
   const cached = costCache.get(sessionId)
   if (cached !== undefined && Date.now() - cached.at < COST_TTL_MS) return cached.payload;
@@ -739,6 +780,7 @@ async function sessionCostPayload(ctx, config, sessionId) {
   let lastAt = null
   let cost = 0
   let priced = false
+  const calls = {}
   for (const event of events ?? []) {
     if (event === null || typeof event !== 'object') continue
     if (typeof event.time === 'number') {
@@ -748,6 +790,11 @@ async function sessionCostPayload(ctx, config, sessionId) {
     if (event.type === 'request/header') {
       const candidate = event.data?.header?.config?.model
       if (typeof candidate === 'string' && candidate !== '') model = candidate
+    }
+    if (event.type === 'tool/call') {
+      const tool = event.data?.name
+      if (typeof tool === 'string' && tool !== '') calls[tool] = (calls[tool] ?? 0) + 1
+      continue
     }
     if (event.type !== 'assistant/message') continue
     const reported = event.data?.usage
@@ -767,7 +814,17 @@ async function sessionCostPayload(ctx, config, sessionId) {
     priced = true
     cost += (miss / 1e6) * table.cacheMiss + (cache / 1e6) * table.cacheHit + (output / 1e6) * table.output
   }
-  const payload = { sessionId, usage, model, cost: priced ? cost : null, firstAt, lastAt }
+  const callFee = priced ? perRequestFee(doc, calls) : 0
+  const payload = {
+    sessionId,
+    usage,
+    model,
+    cost: priced || callFee > 0 ? cost + callFee : null,
+    callFee,
+    calls,
+    firstAt,
+    lastAt,
+  }
   costCache.set(sessionId, { at: Date.now(), payload })
   return payload
 }
@@ -776,6 +833,12 @@ async function sessionCostPayload(ctx, config, sessionId) {
 export function peakTierAt(rule, ms) {
   const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now()
   const zone = rule?.timeZone ?? 'Asia/Shanghai'
+  // 法定节假日全天算空闲（官方规则）；清单在 pricing.json 的 peakRule.holidays
+  const holidays = Array.isArray(rule?.holidays) ? rule.holidays : []
+  if (holidays.length > 0) {
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at))
+    if (holidays.includes(day)) return 'idle'
+  }
   const weekdays = Array.isArray(rule?.weekdays) ? rule.weekdays : [1, 2, 3, 4, 5]
   const ranges = Array.isArray(rule?.ranges) ? rule.ranges : [[9, 12], [14, 18]]
   const parts = new Intl.DateTimeFormat('en-US', {

@@ -243,6 +243,33 @@ assertEqual('按每个事件自己的时间取档：peak 1M 输入 2 元 + idle 
 assertEqual('同时回报 token 汇总与模型', [costA?.usage?.outputTokens, costA?.model], [1_000_000, 'deepseek-flash'])
 assertEqual('缺 ids 报 400', (await call('/token-cost/costs')).status, 400)
 
+// 节假日按空闲（官方规则）
+assertEqual(
+  '法定节假日当天算空闲',
+  peakTierAt({ ...PRICING.peakRule, holidays: ['2026-11-09'] }, Date.parse('2026-11-09T02:00:00Z')),
+  'idle',
+)
+
+// 按次计费：Search / Fetch 各 5 元 / 1000 次
+const callsEvents = [
+  { type: 'request/header', time: 1, data: { header: { config: { model: 'deepseek-flash' } } } },
+  { type: 'assistant/message', time: Date.parse('2026-11-09T02:00:00Z'), data: { usage: { inputTokens: 1_000_000 } } },
+  { type: 'tool/call', time: Date.parse('2026-11-09T02:00:01Z'), data: { name: 'web_search' } },
+  { type: 'tool/call', time: Date.parse('2026-11-09T02:00:02Z'), data: { name: 'web_fetch' } },
+]
+apply(
+  {
+    get: (name) => (name === 'sessionQuery' ? { async readSession() { return { events: callsEvents } } } : undefined),
+    inject: (names, callback) =>
+      callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
+  },
+  {},
+)
+const callsCost = await call('/token-cost/costs?ids=calls')
+assertEqual('按次费用计入会话成本（1M 高峰输入 2 + Search 0.005 + Fetch 0.005）', Number(callsCost.body.costs.calls.cost.toFixed(3)), 2.01)
+assertEqual('按次费用单独回报', Number(callsCost.body.costs.calls.callFee.toFixed(3)), 0.01)
+
+
 
 // ── Platform 账号汇总：余额 + 官方累计花费（total_costs）对账 ─────────
 fs.appendFileSync(

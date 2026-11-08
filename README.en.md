@@ -9,7 +9,7 @@ Live token usage and estimated cost in the DSH sidebar: every session combined p
 task, with a per-session breakdown and per-turn preview on hover. Cost comes from an editable
 price table; the plugin adds no model calls, prompts or tools.
 
-[![version](https://img.shields.io/badge/version-2.5.3-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.6.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## What it does
@@ -58,6 +58,8 @@ Then hover the sidebar badge to see the breakdown.
 - At most 48 cold sessions are warmed per list update (running first); the rest need one click on
   the load-remaining button in the panel footer.
 - Context occupancy includes heuristic error; it is a reference value, not the billed size.
+- **Per-request fees included:** Search / Fetch are billed separately (5 CNY per 1,000 successful requests) and are counted from session logs.
+- **Pricing refresh is weekly (7 days)** by default, override with `network.pricingRefreshHours`; CN public holidays are priced as idle.
 - **Costs are priced per event:** each `assistant/message` is priced by its own timestamp (peak/idle) and the model in effect, instead of pricing a whole session by its last-activity tier — a session crossing the 09:00/12:00/14:00/18:00 boundaries used to be doubled or halved. Host route: `GET /token-cost/costs?ids=…`.
 - **Missing projections are backfilled:** for old/cold sessions without a `tokenUsage` projection, the panel asks `/token-cost/session-usage`, which sums provider-reported usage straight from the session log and returns the model name too.
 - No model requests are added: the plugin only reads local Host projections.

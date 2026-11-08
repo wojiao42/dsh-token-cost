@@ -6,17 +6,63 @@
   "unit": "per_million_tokens",
   "peakRule": {
     "timeZone": "Asia/Shanghai",
-    "weekdays": [1, 2, 3, 4, 5],
-    "ranges": [[9, 12], [14, 18]]
+    "weekdays": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "ranges": [
+      [
+        9,
+        12
+      ],
+      [
+        14,
+        18
+      ]
+    ],
+    "holidays": []
   },
   "models": {
     "deepseek-flash": {
-      "idle": { "cacheHit": 0.02, "cacheMiss": 1, "output": 4 },
-      "peak": { "cacheHit": 0.04, "cacheMiss": 2, "output": 8 }
+      "idle": {
+        "cacheHit": 0.02,
+        "cacheMiss": 1,
+        "output": 4
+      },
+      "peak": {
+        "cacheHit": 0.04,
+        "cacheMiss": 2,
+        "output": 8
+      }
     },
     "deepseek-v4-pro": {
-      "idle": { "cacheHit": 0.15, "cacheMiss": 4.5, "output": 13.5 },
-      "peak": { "cacheHit": 0.3, "cacheMiss": 9, "output": 27 }
+      "idle": {
+        "cacheHit": 0.15,
+        "cacheMiss": 4.5,
+        "output": 13.5
+      },
+      "peak": {
+        "cacheHit": 0.3,
+        "cacheMiss": 9,
+        "output": 27
+      }
     }
+  },
+  "perRequest": {
+    "currency": "CNY",
+    "unit": 1000,
+    "api": {
+      "web_search": 5,
+      "web_fetch": 5
+    }
+  },
+  "refreshHours": 168,
+  "sourceDetail": {
+    "tokens": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+    "search": "Search / Fetch 各 5 元 / 1000 次成功请求（独立 API 计费）",
+    "peakWindow": "北京时间 周一至周五 9:00-12:00、14:00-18:00；法定节假日全天算空闲"
   }
 }
