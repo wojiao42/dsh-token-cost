@@ -287,13 +287,45 @@ async function balancePayload(config, localTotal) {
     const platform = await platformSummary(config);
     if (platform !== undefined) {
       const local = typeof localTotal === 'number' && Number.isFinite(localTotal) ? localTotal : null;
+      const officialTotalCost = typeof platform.officialTotalCost === 'number' ? platform.officialTotalCost : null;
+      const totalCredit =
+        officialTotalCost !== null && typeof platform.total === 'number'
+          ? officialTotalCost + platform.total + (typeof platform.granted === 'number' ? platform.granted : 0)
+          : null;
+      const ledgerFile = join(stateDir(), 'ledger.json');
+      const ledger = readJson(ledgerFile) ?? { snapshots: [] };
+      const entry = {
+        at: platform.at,
+        currency: platform.currency,
+        total: platform.total,
+        granted: platform.granted,
+        officialTotalCost,
+        local,
+        algo: LEDGER_ALGO,
+      };
+      ledger.snapshots.push(entry);
+      if (ledger.snapshots.length > MAX_SNAPSHOTS) ledger.snapshots = ledger.snapshots.slice(-MAX_SNAPSHOTS);
+      writeJson(ledgerFile, ledger);
+      // 每天留一份账本备份（只追加，供事后核对）
+      try {
+        const day = new Date().toISOString().slice(0, 10);
+        writeJson(join(stateDir(), 'backups', 'ledger-' + day + '.json'), ledger);
+      } catch {
+        /* 备份失败不影响主流程 */
+      }
       return {
         ...platform,
         enabled: true,
         ok: true,
         local,
+        officialTotalCost,
+        totalCredit,
+        rechargeTotal:
+          typeof config?.balance?.rechargeTotal === 'number' && Number.isFinite(config.balance.rechargeTotal)
+            ? config.balance.rechargeTotal
+            : null,
         cumulativeGap:
-          local !== null && typeof platform.officialTotalCost === 'number' ? local - platform.officialTotalCost : null,
+          local !== null && officialTotalCost !== null ? local - officialTotalCost : null,
       };
     }
   } catch {

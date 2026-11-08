@@ -256,7 +256,7 @@ apply(
     inject: (names, callback) =>
       callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
   },
-  { network: { balance: true }, balance: { readCredentials: true } },
+  { network: { balance: true }, balance: { readCredentials: true, rechargeTotal: 100 } },
 )
 fetchImpl = async (url) => {
   if (String(url).includes('get_user_summary')) {
@@ -283,6 +283,9 @@ const platformBalance = await call('/token-cost/balance?local=91.675')
 assertEqual('优先用 Platform 汇总：余额 = 充值余额', [platformBalance.body.ok, platformBalance.body.source, Number(platformBalance.body.total.toFixed(2))], [true, 'platform', 19.12])
 assertEqual('官方累计花费读出来了', Number(platformBalance.body.officialTotalCost.toFixed(2)), 94.18)
 assertEqual('一次读取就能算累计偏差（本地 − 官方）', Number(platformBalance.body.cumulativeGap.toFixed(3)), -2.501)
+assertEqual('总额度 = 官方累计 + 充值余额 + 赠送余额', Number(platformBalance.body.totalCredit.toFixed(3)), 113.292)
+assertEqual('配置了充值总额就能拆出赠送', [platformBalance.body.rechargeTotal, Number((platformBalance.body.totalCredit - 100).toFixed(2))], [100, 13.29])
+assert('平台快照写进了账本（含官方累计花费）', JSON.parse(fs.readFileSync(path.join(HOME, 'token-cost', 'ledger.json'), 'utf8')).snapshots.some((s) => typeof s.officialTotalCost === 'number'))
 
 fs.rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)

@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.2.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.3.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,9 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.3.0**（2026-11-08）：面板加「账本」区（一次余额查询即可显示）：**总额度（充值+赠送）/ 官方已花 / 本地预估 / 偏差 / 官方余额（充值、赠送拆分）/ 预估余额**；`balance.rechargeTotal` 配了历史充值总额时，总额度会拆成「充值 / 赠送」。平台快照同时写入账本（含 `officialTotalCost`）并**每天落一份备份** `$DSH_HOME/token-cost/backups/ledger-<日期>.json`，便于事后核对与校验。
+
 
 - **v2.2.0**（2026-11-08）：**用官方的「累计花费」直接对账**。新增 `balance.readCredentials` 下读取 DSH 凭据库里的 Platform 授权令牌（`deepseek-account-platform/default`），调 `platform.deepseek.com/api/v0/users/get_user_summary` 拿到 ① 充值余额 ② 赠送余额 ③ **total_costs（官方累计花费）**。面板 meta 行显示「官方累计 ¥x / 本地累计 ¥y / 差 ±¥z」，一次读取就能对账，不再需要等两个快照。实测本机：官方累计 ¥94.18、本地逐事件 ¥91.68（少算 2.7%）、充值余额 ¥19.12、赠送余额 ¥0 → 反推赠送过 ¥13.29（充值 100）。
 

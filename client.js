@@ -174,6 +174,14 @@ window.__ModuleLoader__.load({
       balance: '余额',
       drift: '对账差',
       granted: '赠送',
+      ledgerTotalCredit: '总额度',
+      ledgerOfficialSpent: '官方已花',
+      ledgerLocalSpent: '本地预估',
+      ledgerGap: '偏差',
+      ledgerOfficialBalance: '官方余额',
+      ledgerEstimatedBalance: '预估余额',
+      ledgerRecharge: '充值',
+      ledgerGift: '赠送',
       toppedUp: '充值',
       officialTotal: '官方累计',
       localTotal: '本地累计',
@@ -217,6 +225,14 @@ window.__ModuleLoader__.load({
       balance: 'Balance',
       drift: 'Drift',
       granted: 'granted',
+      ledgerTotalCredit: 'Total credit',
+      ledgerOfficialSpent: 'Official spend',
+      ledgerLocalSpent: 'Local estimate',
+      ledgerGap: 'Gap',
+      ledgerOfficialBalance: 'Official balance',
+      ledgerEstimatedBalance: 'Estimated balance',
+      ledgerRecharge: 'Recharged',
+      ledgerGift: 'Gifted',
       toppedUp: 'topped up',
       officialTotal: 'Official total',
       localTotal: 'Local total',
@@ -272,6 +288,10 @@ window.__ModuleLoader__.load({
       '.tcs-headTitle{color:var(--dsw-alias-label-secondary)}',
       '.tcs-headValue{font-weight:600}',
       '.tcs-meta{display:flex;flex-wrap:wrap;gap:4px 12px;padding-bottom:6px;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary)}',
+    '.tcs-ledger{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}',
+    '.tcs-ledgerRow{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}',
+    '.tcs-ledgerKey{color:var(--dsw-alias-label-tertiary);min-width:76px}',
+    '.tcs-ledgerVal{font-variant-numeric:tabular-nums}',
       '.tcs-list{display:flex;flex-direction:column;gap:1px;padding:4px 0}',
       '.tcs-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto auto 44px;align-items:center;gap:8px;width:100%;',
       'padding:4px;border:none;border-radius:var(--dsw-radius-sm,8px);background:0 0;font:inherit;color:inherit;text-align:left;cursor:pointer}',
@@ -1266,6 +1286,48 @@ window.__ModuleLoader__.load({
         : undefined;
 
       const visible = summary.rows.filter((row) => row.billed > 0 || row.running);
+      // 账本：官方累计花费 / 本地预估 / 余额 / 预估余额（一次余额查询就能算出）
+      const ledgerRows = (() => {
+        if (net === null || net.ok !== true) return [];
+        const rows = [];
+        const totalCredit = typeof net.totalCredit === 'number' ? net.totalCredit : null;
+        const officialSpent = typeof net.officialTotalCost === 'number' ? net.officialTotalCost : null;
+        const localSpent = typeof net.local === 'number' ? net.local : null;
+        const officialBalance = typeof net.total === 'number' ? net.total : null;
+        if (totalCredit !== null) rows.push({ key: 'credit', label: tr('ledgerTotalCredit'), value: fmtMoney(totalCredit) });
+        if (officialSpent !== null) rows.push({ key: 'official', label: tr('ledgerOfficialSpent'), value: fmtMoney(officialSpent) });
+        if (localSpent !== null) rows.push({ key: 'local', label: tr('ledgerLocalSpent'), value: fmtMoney(localSpent) });
+        if (typeof net.cumulativeGap === 'number') {
+          rows.push({
+            key: 'gap',
+            label: tr('ledgerGap'),
+            value: fmtSigned(net.cumulativeGap) + (officialSpent !== null && officialSpent > 0 ? '（' + ((net.cumulativeGap / officialSpent) * 100).toFixed(1) + '%）' : ''),
+          });
+        }
+        if (officialBalance !== null) {
+          const split =
+            typeof net.granted === 'number' && net.granted > 0
+              ? '（' + tr('ledgerRecharge') + ' ' + fmtMoney(net.toppedUp) + ' / ' + tr('ledgerGift') + ' ' + fmtMoney(net.granted) + '）'
+              : '';
+          rows.push({ key: 'balance', label: tr('ledgerOfficialBalance'), value: fmtMoney(officialBalance) + split });
+        }
+        if (totalCredit !== null && localSpent !== null) {
+          const estimated = totalCredit - localSpent;
+          const recharge = typeof net.rechargeTotal === 'number' ? net.rechargeTotal : null;
+          const gift = recharge !== null ? totalCredit - recharge : null;
+          rows.push({
+            key: 'estimated',
+            label: tr('ledgerEstimatedBalance'),
+            value:
+              fmtMoney(estimated) +
+              (recharge !== null && gift !== null
+                ? '（' + tr('ledgerRecharge') + ' ' + fmtMoney(recharge) + ' / ' + tr('ledgerGift') + ' ' + fmtMoney(gift) + '）'
+                : ''),
+          });
+        }
+        return rows;
+      })();
+
       const panel = open
         ? ReactDOM.createPortal(
             h(
@@ -1330,6 +1392,20 @@ window.__ModuleLoader__.load({
                     )
                   : null,
               ),
+              ledgerRows.length === 0
+                ? null
+                : h(
+                    'div',
+                    { className: 'tcs-ledger' },
+                    ledgerRows.map((entry) =>
+                      h(
+                        'div',
+                        { className: 'tcs-ledgerRow', key: entry.key },
+                        h('span', { className: 'tcs-ledgerKey' }, entry.label),
+                        h('span', { className: 'tcs-ledgerVal' }, entry.value),
+                      ),
+                    ),
+                  ),
               h(
                 'div',
                 { className: 'tcs-list' },
