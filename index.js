@@ -146,11 +146,15 @@ async function pricingDoc(config, { force = false } = {}) {
   const online = config?.network?.pricing === true;
   const fresh =
     cached !== undefined &&
-  typeof cached.fetchedAt === 'number' &&
-  Date.now() - cached.fetchedAt < pricingTtlMs(config);
-  if (fresh && force !== true) return { doc: cached.doc, source: 'cache', fetchedAt: cached.fetchedAt };
+    typeof cached.fetchedAt === 'number' &&
+    // 老缓存可能缺 perRequest / refreshHours 这类新字段，缺了就当过期（会去拉新或回退内置表）
+    cached.doc?.perRequest !== undefined &&
+    Date.now() - cached.fetchedAt < pricingTtlMs(config);
+  if (fresh && force !== true) {
+    return { doc: { ...EMBEDDED_PRICING, ...cached.doc }, source: 'cache', fetchedAt: cached.fetchedAt };
+  }
   if (!online) {
-    const fallback = cached?.doc ?? EMBEDDED_PRICING;
+    const fallback = { ...EMBEDDED_PRICING, ...(cached?.doc ?? {}) };
     return { doc: fallback, source: cached ? 'cache' : 'embedded', fetchedAt: cached?.fetchedAt ?? null };
   }
   try {
@@ -164,7 +168,7 @@ async function pricingDoc(config, { force = false } = {}) {
     writeJson(file, record);
     return { doc, source: 'remote', fetchedAt: record.fetchedAt };
   } catch (error) {
-    const fallback = cached?.doc ?? EMBEDDED_PRICING;
+    const fallback = { ...EMBEDDED_PRICING, ...(cached?.doc ?? {}) };
     return {
       doc: fallback,
       source: cached ? 'cache' : 'embedded',

@@ -328,6 +328,7 @@ const logLines = [
     time: Date.parse('2026-11-09T02:00:00Z'),
     data: { usage: { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 } },
   }),
+  JSON.stringify({ type: 'tool/call', time: Date.parse('2026-11-09T02:00:01Z'), data: { name: 'web_search' } }),
 ].join('\n')
 fs.writeFileSync(path.join(sessionsDir, 'session.v4.jsonl.zstd'), zstd.zstdCompressSync(Buffer.from(logLines + '\n')))
 fetchImpl = async (url) => {
@@ -367,8 +368,12 @@ assertEqual('价目表 TTL 可被 network.pricingRefreshHours 覆盖', mod.prici
 assertEqual('非法 TTL 回退默认', mod.pricingTtlMs({ network: { pricingRefreshHours: -1 } }), 7 * 24 * 60 * 60 * 1000)
 
 const hostLocal = await call('/token-cost/balance?local=0')
-assertEqual('本机累计用 Host 扫日志的权威值（1M 高峰未缓存 = ¥2）', Number(hostLocal.body.local.toFixed(4)), 2)
-assertEqual('差额按权威本机累计算', Number(hostLocal.body.cumulativeGap.toFixed(3)), Number((2 - 94.17609412).toFixed(3)))
+assertEqual(
+  '本机累计 = 1M 高峰未缓存 ¥2 + 一次 Search ¥0.005',
+  Number(hostLocal.body.local.toFixed(4)),
+  2.005,
+)
+assertEqual('差额按权威本机累计算（含按次费用）', Number(hostLocal.body.cumulativeGap.toFixed(3)), Number((2.005 - 94.17609412).toFixed(3)))
 
 fs.rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)
