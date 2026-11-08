@@ -1441,7 +1441,7 @@ window.__ModuleLoader__.load({
                           : ''),
                     )
                   : null,
-                net !== null && net.ok === true && net.drift !== null
+                net !== null && net.ok === true && net.drift !== null && net.drift !== undefined
                   ? h('span', { className: 'tcs-net' }, tr('drift') + ' ' + fmtSigned(net.drift.gap))
                   : null,
                 net !== null && net.ok === true && typeof net.cumulativeGap === 'number'

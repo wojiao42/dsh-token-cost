@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.4.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.4.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.4.1**（2026-11-08）：修面板展开瞬间崩溃（`Cannot read properties of undefined (reading 'gap')`）。v2.2.0 起余额查询走 Platform 汇总，返回结构里没有旧的 `drift` 字段，而面板 meta 行还按 `net.drift !== null` 判断——`undefined !== null` 成立，于是读 `net.drift.gap` 抛错、徽标整个从侧栏消失。改为同时判 undefined；展开面板会正常显示账本。
 
 - **v2.4.0**（2026-11-08）：**账本定稿**。面板「账本」区分四组科目——**额度**（充值合计 / 赠送合计 / 总额度）、**消耗**（官方累计消耗 / 本机累计消耗 / 双边差额）、**余额**（官方余额 / 本机预估余额）、**账本**（最近校对 / 校对状态 / 账本备份）。校对状态按 |双边差额| ÷ 官方累计消耗 判定：≤2% 正常、≤5% 轻微偏差、>5% 偏差偏大。备份在 `$DSH_HOME/token-cost/backups/ledger-<日期>.json`（每天一份，面板显示份数与最近一份文件名）。
 
