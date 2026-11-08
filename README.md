@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.6.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.6.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.6.1**（2026-11-08）：补上价目表刷新周期的测试断言（默认 7 天 / `network.pricingRefreshHours` 覆盖 / 非法值回退），并导出 `pricingTtlMs()` 方便校验。
 
 - **v2.6.0**（2026-11-08）：**跟官方计费的精度补齐 + 刷新周期定为 7 天**。① 价目表刷新从 24h 改为 **7 天**（`network.pricingRefreshHours` 可覆盖）：官方近年几个月才调一次价，7 天足够跟上，减少对 GitHub 的请求。② **Search / Fetch 按次计费**计入成本：官方各 5 元 / 1000 次成功请求，之前没算——实测本机 177 次 Search + 83 次 Fetch = ¥1.30，正好是之前对账差的来源。③ **法定节假日**按空闲计价（`peakRule.holidays` 清单，节假日全天算空闲）。④ 精度实测：token 部分 ¥96.045 + 按次 ¥1.300 = ¥97.345，官方累计 ¥97.28 → **差 ¥0.065（0.07%）**。
 

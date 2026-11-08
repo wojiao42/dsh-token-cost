@@ -86,7 +86,7 @@ export const EMBEDDED_PRICING = {
 };
 
 /** 价目表刷新周期：默认 7 天，可用 profile 的 network.pricingRefreshHours 覆盖。 */
-function pricingTtlMs(config) {
+export function pricingTtlMs(config) {
   const hours = config?.network?.pricingRefreshHours;
   if (typeof hours === 'number' && Number.isFinite(hours) && hours > 0) return hours * 60 * 60 * 1000;
   return PRICING_TTL_MS;

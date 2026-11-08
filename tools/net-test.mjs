@@ -361,6 +361,11 @@ apply(
   { network: { balance: true }, balance: { readCredentials: true, rechargeTotal: 100 } },
 )
 mod.invalidateLocalTotalCache()
+// 价目表刷新周期（TTL）：默认 7 天，可配置覆盖，非法值回退默认
+assertEqual('价目表 TTL 默认 7 天', mod.pricingTtlMs({}), 7 * 24 * 60 * 60 * 1000)
+assertEqual('价目表 TTL 可被 network.pricingRefreshHours 覆盖', mod.pricingTtlMs({ network: { pricingRefreshHours: 36 } }), 36 * 60 * 60 * 1000)
+assertEqual('非法 TTL 回退默认', mod.pricingTtlMs({ network: { pricingRefreshHours: -1 } }), 7 * 24 * 60 * 60 * 1000)
+
 const hostLocal = await call('/token-cost/balance?local=0')
 assertEqual('本机累计用 Host 扫日志的权威值（1M 高峰未缓存 = ¥2）', Number(hostLocal.body.local.toFixed(4)), 2)
 assertEqual('差额按权威本机累计算', Number(hostLocal.body.cumulativeGap.toFixed(3)), Number((2 - 94.17609412).toFixed(3)))
