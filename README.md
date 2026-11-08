@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.3.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.4.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.4.0**（2026-11-08）：**账本定稿**。面板「账本」区分四组科目——**额度**（充值合计 / 赠送合计 / 总额度）、**消耗**（官方累计消耗 / 本机累计消耗 / 双边差额）、**余额**（官方余额 / 本机预估余额）、**账本**（最近校对 / 校对状态 / 账本备份）。校对状态按 |双边差额| ÷ 官方累计消耗 判定：≤2% 正常、≤5% 轻微偏差、>5% 偏差偏大。备份在 `$DSH_HOME/token-cost/backups/ledger-<日期>.json`（每天一份，面板显示份数与最近一份文件名）。
 
 - **v2.3.0**（2026-11-08）：面板加「账本」区（一次余额查询即可显示）：**总额度（充值+赠送）/ 官方已花 / 本地预估 / 偏差 / 官方余额（充值、赠送拆分）/ 预估余额**；`balance.rechargeTotal` 配了历史充值总额时，总额度会拆成「充值 / 赠送」。平台快照同时写入账本（含 `officialTotalCost`）并**每天落一份备份** `$DSH_HOME/token-cost/backups/ledger-<日期>.json`，便于事后核对与校验。
 
