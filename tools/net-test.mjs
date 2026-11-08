@@ -1,0 +1,172 @@
+#!/usr/bin/env node
+/**
+ * 联网功能离线断言：计价规则刷新（pricing.json）+ 官方余额对账（含账本与偏差）。
+ * 全程用临时 DSH_HOME 与桩 fetch，不联网、不碰真实凭据。
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path'
+
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'token-cost-net-'))
+process.env.DSH_HOME = HOME
+
+const mod = await import('../index.js')
+const { apply, EMBEDDED_PRICING, resolveApiKey, driftOf } = mod
+
+let failed = 0
+const assert = (name, cond) => {
+  if (cond) console.log('PASS  ' + name)
+  else {
+    failed += 1
+    console.log('FAIL  ' + name)
+  }
+}
+const assertEqual = (name, actual, expected) => {
+  const a = JSON.stringify(actual)
+  const e = JSON.stringify(expected)
+  if (a === e) console.log('PASS  ' + name)
+  else {
+    failed += 1
+    console.log('FAIL  ' + name + '\n      expected: ' + e + '\n      actual  : ' + a)
+  }
+}
+
+// ── 内置兜底表 ───────────────────────────────────────────────
+assert('兜底表带版本与来源', EMBEDDED_PRICING.version === 1 && /^https:/.test(EMBEDDED_PRICING.source))
+assertEqual('兜底表 flash 空闲价', EMBEDDED_PRICING.models['deepseek-flash'].idle, { cacheHit: 0.02, cacheMiss: 1, output: 4 })
+assertEqual('兜底表 flash 高峰价', EMBEDDED_PRICING.models['deepseek-flash'].peak, { cacheHit: 0.04, cacheMiss: 2, output: 8 })
+
+// ── 对账口径 ─────────────────────────────────────────────────
+assertEqual('样本不足时不给对账', driftOf([{ at: 1, total: 100, local: 0 }]), null)
+const drift = driftOf([
+  { at: 1000, total: 100, local: 10 },
+  { at: 2000, total: 96, local: 14 },
+])
+assertEqual('官方花了 4、本地算 4 → gap 0', [drift.spentOfficial, drift.spentLocal, drift.gap], [4, 4, 0])
+const drift2 = driftOf([
+  { at: 1000, total: 100, local: 10 },
+  { at: 2000, total: 96, local: 12 },
+])
+assertEqual('本地少算 → gap 为负', drift2.gap, -2)
+
+// ── API key 解析优先级 ────────────────────────────────────────
+assertEqual('配置里直接给 key 优先', resolveApiKey({ balance: { apiKey: 'sk-config' } }, {}), { key: 'sk-config', source: 'config' })
+assertEqual('env 次之', resolveApiKey({ balance: { apiKeyEnv: 'MY_KEY' } }, { MY_KEY: 'sk-env' }), { key: 'sk-env', source: 'env' })
+assertEqual('没允许就不读凭据文件', resolveApiKey({}, {}), undefined)
+fs.writeFileSync(path.join(HOME, '.credentials.yaml'), "refs:\n  DEEPSEEK_API_KEY: sk-from-credentials\n", 'utf8')
+assertEqual(
+  '允许后从 DSH 凭据库取 key',
+  resolveApiKey({ balance: { readCredentials: true } }, {}),
+  { key: 'sk-from-credentials', source: 'credentials' },
+)
+
+// ── 路由：桩 fetch ──────────────────────────────────────────
+let routes = new Map()
+let fetchCalls = []
+let fetchImpl = async () => ({ ok: true, json: async () => ({}) })
+globalThis.fetch = async (url, options) => {
+  fetchCalls.push({ url: String(url), options })
+  return fetchImpl(url, options)
+}
+
+const fakeResponse = () => {
+  const state = { status: 0, body: '' }
+  return {
+    state,
+    writeHead(status) {
+      state.status = status
+    },
+    end(chunk) {
+      if (typeof chunk === 'string') state.body += chunk
+    },
+  }
+}
+const call = async (url, method = 'GET') => {
+  const response = fakeResponse()
+  const request = { method, url }
+  await routes.get(url.split('?')[0]).handler(request, response)
+  return { status: response.state.status, body: response.state.body === '' ? null : JSON.parse(response.state.body) }
+}
+
+apply(
+  {
+    get: () => undefined,
+    inject: (names, callback) =>
+      callback({
+        webServer: {
+          register(spec) {
+            routes.set(spec.path, spec)
+            return () => {}
+          },
+        },
+        effect: (fn) => fn(),
+      }),
+  },
+  { network: { pricing: true, balance: true }, balance: { readCredentials: true } },
+)
+
+assertEqual('注册了三条路由', [...routes.keys()].sort(), ['/token-cost/balance', '/token-cost/pricing', '/token-cost/turns'])
+
+// 计价：远程成功
+fetchImpl = async () => ({
+  ok: true,
+  json: async () => ({
+    ...EMBEDDED_PRICING,
+    updatedAt: '2026-12-01T00:00:00Z',
+    models: { 'deepseek-flash': { idle: { cacheHit: 0.03, cacheMiss: 2, output: 5 }, peak: { cacheHit: 0.06, cacheMiss: 4, output: 10 } } },
+  }),
+})
+let pricing = await call('/token-cost/pricing')
+assertEqual('远程计价规则被采用', [pricing.status, pricing.body.source, pricing.body.doc.updatedAt], [200, 'remote', '2026-12-01T00:00:00Z'])
+assert('远程规则落盘缓存', fs.existsSync(path.join(HOME, 'token-cost', 'pricing.json')))
+const callsAfterRemote = fetchCalls.length
+await call('/token-cost/pricing')
+assertEqual('24h 内走缓存不再联网', fetchCalls.length, callsAfterRemote)
+
+// 计价：远程坏了退回缓存
+fetchImpl = async () => ({ ok: false, status: 503, json: async () => ({}) })
+pricing = await call('/token-cost/pricing?refresh=1')
+assertEqual('远程失败退回上次缓存', [pricing.body.source, typeof pricing.body.error], ['cache', 'string'])
+
+// 余额：成功
+fetchImpl = async () => ({
+  ok: true,
+  json: async () => ({
+    is_available: true,
+    balance_infos: [{ currency: 'CNY', total_balance: '25.20', granted_balance: '0.00', topped_up_balance: '25.20' }],
+  }),
+})
+let balance = await call('/token-cost/balance?local=10')
+assertEqual('余额读到了', [balance.status, balance.body.ok, balance.body.total, balance.body.currency], [200, true, 25.2, 'CNY'])
+assertEqual('key 来源是凭据库', balance.body.keySource, 'credentials')
+assert('账本落盘', fs.existsSync(path.join(HOME, 'token-cost', 'ledger.json')))
+
+// 余额：1 分钟内同 local 走缓存
+const callsBeforeCache = fetchCalls.length
+balance = await call('/token-cost/balance?local=10')
+assertEqual('60s 内同 local 走缓存', [balance.body.cached === true, fetchCalls.length], [true, callsBeforeCache])
+
+// 余额：key 缺失
+const modNoKey = await call('/token-cost/balance?local=20')
+assertEqual('本地估算变了会重新查余额', modNoKey.status, 200)
+
+// 关掉网络功能：不联网、返回 embedded / enabled:false
+routes = new Map()
+apply(
+  {
+    get: () => undefined,
+    inject: (names, callback) =>
+      callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
+  },
+  {},
+)
+const callsBeforeOffline = fetchCalls.length
+pricing = await call('/token-cost/pricing')
+balance = await call('/token-cost/balance?local=1')
+assertEqual('网络关掉时计价退回内置表', [pricing.body.source, pricing.body.doc.updatedAt], ['cache', '2026-12-01T00:00:00Z'])
+assertEqual('网络关掉时余额返回 enabled:false', balance.body.enabled, false)
+assertEqual('网络关掉时一次都没联网', fetchCalls.length, callsBeforeOffline)
+
+fs.rmSync(HOME, { recursive: true, force: true })
+console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)
+process.exitCode = failed === 0 ? 0 : 1

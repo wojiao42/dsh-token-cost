@@ -27,11 +27,18 @@ window.__ModuleLoader__.load({
       },
     };
 
+    /** 高峰规则：默认北京时间周一至周五 09:00–12:00、14:00–18:00，可被远程 pricing.json 覆盖。 */
+    let PEAK_RULE = { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[9, 12], [14, 18]] };
+    /** 当前价格来源：embedded / cache / remote。 */
+    let pricingSource = 'embedded';
+    let pricingUpdatedAt = null;
+
     /** 某个时刻落在高峰还是空闲档（毫秒时间戳；非法值按当前时刻）。 */
     function priceTierAt(ms) {
       const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now();
+      const rule = PEAK_RULE;
       const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'Asia/Shanghai',
+        timeZone: rule.timeZone,
         weekday: 'short',
         hour: '2-digit',
         hour12: false,
@@ -40,11 +47,45 @@ window.__ModuleLoader__.load({
         const hit = parts.find((part) => part.type === type);
         return hit === undefined ? undefined : hit.value;
       };
-      const weekday = get('weekday');
+      // ISO 编号：周一 = 1 … 周日 = 7
+      const weekdayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const weekday = weekdayNames.indexOf(get('weekday')) + 1;
       const hour = Number(get('hour'));
-      const isWorkday = weekday !== 'Sat' && weekday !== 'Sun';
-      const inWindow = (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18);
+      const isWorkday = Array.isArray(rule.weekdays) ? rule.weekdays.includes(weekday) : true;
+      const inWindow = (rule.ranges ?? []).some((range) => Array.isArray(range) && hour >= range[0] && hour < range[1]);
       return isWorkday && inWindow ? 'peak' : 'idle';
+    }
+
+    /**
+     * 从 Host 取计价规则（Host 端缓存 24h、远程失败退回缓存/内置表），拿到就替换本地表。
+     * 这样官方调价后不用等插件发版：Host 拉到新 pricing.json，面板下一次渲染就用新价。
+     */
+    async function refreshPricing() {
+      if (typeof fetch !== 'function') return;
+      try {
+        const response = await fetch('/token-cost/pricing');
+        if (!response.ok) return;
+        const payload = await response.json();
+        const doc = payload?.doc;
+        if (doc === null || typeof doc !== 'object' || doc.models === null || typeof doc.models !== 'object') return;
+        for (const [model, tiers] of Object.entries(doc.models)) {
+          if (tiers !== null && typeof tiers === 'object' && tiers.idle !== undefined && tiers.peak !== undefined) {
+            PRICES[model] = tiers;
+          }
+        }
+        const rule = doc.peakRule;
+        if (rule !== null && typeof rule === 'object' && typeof rule.timeZone === 'string' && Array.isArray(rule.ranges)) {
+          PEAK_RULE = {
+            timeZone: rule.timeZone,
+            weekdays: Array.isArray(rule.weekdays) ? rule.weekdays : PEAK_RULE.weekdays,
+            ranges: rule.ranges,
+          };
+        }
+        pricingSource = typeof payload.source === 'string' ? payload.source : pricingSource;
+        pricingUpdatedAt = typeof doc.updatedAt === 'string' ? doc.updatedAt : null;
+      } catch {
+        /* 联网失败就继续用现有的表 */
+      }
     }
 
     /** 价格表同时接受 {idle,peak} 分档与旧的扁平写法（离线测试与自定义价格用扁平）。 */
@@ -82,6 +123,14 @@ window.__ModuleLoader__.load({
     };
 
     const fmtPercent = (value) => (Math.round(asNumber(value) * 10) / 10).toFixed(1) + '%';
+
+    /** 带符号的金额（对账差用）：正数=本地多算，负数=本地少算。 */
+    const fmtSigned = (value) => {
+      if (!Number.isFinite(value)) return '—';
+      const abs = Math.abs(value);
+      const body = abs >= 0.01 ? abs.toFixed(2) : abs.toFixed(4);
+      return (value >= 0 ? '+' : '−') + '¥' + body;
+    };
 
     const modelOf = (selection) => {
       if (selection === null || typeof selection !== 'object') return null;
@@ -122,6 +171,8 @@ window.__ModuleLoader__.load({
       total: '全部',
       current: '当前',
       asOf: '截至',
+      balance: '余额',
+      drift: '对账差',
       ago: '最近',
       turnsTitle: '逐轮用量',
       turn: '第',
@@ -158,6 +209,8 @@ window.__ModuleLoader__.load({
       total: 'All',
       current: 'Now',
       asOf: 'as of',
+      balance: 'Balance',
+      drift: 'Drift',
       ago: 'last',
       turnsTitle: 'Per-turn usage',
       turn: 'turn',
@@ -890,6 +943,9 @@ window.__ModuleLoader__.load({
         };
       }, [open]);
 
+      const [net, setNet] = React.useState(null);
+      const netLocalRef = React.useRef(0);
+      netLocalRef.current = summary.totals.cost;
       const [pinned, setPinned] = React.useState(false);
       const [, setTick] = React.useState(0);
       const pinnedRef = React.useRef(pinned);
@@ -908,6 +964,28 @@ window.__ModuleLoader__.load({
         const id = setInterval(() => setTick((value) => value + 1), 1000);
         return () => clearInterval(id);
       }, [open]);
+      React.useEffect(() => {
+        if (!open) return undefined;
+        let stopped = false;
+        const load = async () => {
+          if (typeof fetch !== 'function') return;
+          try {
+            const response = await fetch('/token-cost/balance?local=' + encodeURIComponent(netLocalRef.current.toFixed(6)));
+            if (!response.ok) return;
+            const payload = await response.json();
+            if (!stopped) setNet(payload);
+          } catch {
+            /* 联网失败就什么都不显示 */
+          }
+        };
+        load();
+        const timer = setInterval(load, 60_000);
+        return () => {
+          stopped = true;
+          clearInterval(timer);
+        };
+      }, [open]);
+
       React.useEffect(() => {
         trackRunning(summary.rows, Date.now());
       });
@@ -1099,6 +1177,12 @@ window.__ModuleLoader__.load({
                 totals.asOf > 0 ? h('span', null, tr('asOf') + ' ' + fmtClock(totals.asOf)) : null,
                 totals.decodeRate === null ? null : h('span', null, totals.decodeRate.toFixed(1) + ' tok/s'),
                 totals.avgTtft === null ? null : h('span', null, tr('ttft') + ' ' + fmtMs(totals.avgTtft)),
+                net !== null && net.enabled === true
+                  ? h('span', { className: 'tcs-net' }, tr('balance') + ' ' + (net.ok === true ? fmtMoney(net.total) : '—'))
+                  : null,
+                net !== null && net.ok === true && net.drift !== null
+                  ? h('span', { className: 'tcs-net' }, tr('drift') + ' ' + fmtSigned(net.drift.gap))
+                  : null,
               ),
               h(
                 'div',
@@ -1281,6 +1365,8 @@ window.__ModuleLoader__.load({
     const inject = ['slots', 'locale', 'sessions'];
 
     function apply(ctx) {
+      // 官方调价后不必等发版：启动时拉一次 pricing.json（Host 端缓存 24h）
+      void refreshPricing();
       ctx.effect(
         () => ctx.locale.register(NS_SUMMARY, { zh: SUMMARY_ZH, en: SUMMARY_EN }),
         'token-cost: summary dictionaries',
@@ -1330,6 +1416,11 @@ window.__ModuleLoader__.load({
     }
 
     // __internals 只给离线测试用（插件加载器忽略额外字段）
-    return { name: 'token-cost', inject, apply, __internals: { turnView, costOf, priceTierAt, resolvePrice, PRICES } };
+    return {
+      name: 'token-cost',
+      inject,
+      apply,
+      __internals: { turnView, costOf, priceTierAt, resolvePrice, PRICES, refreshPricing, fmtSigned },
+    };
   },
 });

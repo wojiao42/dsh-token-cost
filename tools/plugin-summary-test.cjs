@@ -389,11 +389,35 @@ assertEqual('turnView marks an unpriced model with a dash',
   globalThis.__FORCE_OPEN__ = true;
   const openPanel = render({ useSessions, t, wide: true, warmProjections });
   const previewRows = collect(openPanel).filter((entry) => entry.className === 'tcs-row');
+  // 面板打开后还会去查官方余额，这里只关心逐轮取数
+  const turnUrls = () => urls.filter((url) => String(url).startsWith('/token-cost/turns'));
   assert('panel rows expose a hover hook for the per-turn preview', typeof previewRows[0]?.node.props.onMouseEnter === 'function');
   previewRows[0].node.props.onMouseEnter();
-  assert('the per-turn fetch waits for the debounce', urls.length === 0);
+  assert('the per-turn fetch waits for the debounce', turnUrls().length === 0);
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assertEqual('hovering a row fetches that session per-turn usage (no truncation)', urls, ['/token-cost/turns?sessionId=a']);
+  assertEqual('hovering a row fetches that session per-turn usage (no truncation)', turnUrls(), ['/token-cost/turns?sessionId=a']);
+
+  // --- 联网：计价规则远程刷新 + 对账差格式
+  globalThis.fetch = async (url) => ({
+    ok: true,
+    json: async () =>
+      String(url).startsWith('/token-cost/pricing')
+        ? {
+            source: 'remote',
+            doc: {
+              updatedAt: '2026-12-01T00:00:00Z',
+              peakRule: { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[10, 11]] },
+              models: { 'deepseek-flash': { idle: { cacheHit: 0.05, cacheMiss: 3, output: 6 }, peak: { cacheHit: 0.1, cacheMiss: 6, output: 12 } } },
+            },
+          }
+        : { enabled: true, ok: true, total: 25.2, currency: 'CNY', drift: { gap: -0.42 } },
+  });
+  const { refreshPricing, fmtSigned, PRICES: livePrices } = plugin.__internals;
+  await refreshPricing();
+  assertEqual('远程 pricing.json 覆盖了单价表', livePrices['deepseek-flash'].idle.cacheMiss, 3);
+  assertEqual('远程 peakRule 覆盖了高峰时段', priceTierAt(at('2026-11-09T02:30:00Z')), 'peak'); // 北京 10:30 ∈ [10,11)
+  assertEqual('对账差格式带符号', fmtSigned(-0.42), '−¥0.42');
+  assertEqual('对账差为正时也是加号', fmtSigned(1.5), '+¥1.50');
   globalThis.__FORCE_OPEN__ = false;
 
   console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.0167');

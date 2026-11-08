@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-1.8.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -65,6 +65,16 @@
 侧栏收起时降级为只显示合计金额。输入框下方**刻意不显示任何东西**——同一份合计不重复出现。
 早期版本在输入框下方也有一个「本会话」药丸，两处显示同一类数字属于重复；现在只保留侧栏一处，
 把「全部」与「当前」并排放在同一块。
+
+### 官方余额对账
+
+面板的 meta 行会显示 **官方余额**（¥）和 **对账差**。Host 每次查余额时，把「官方余额」和面板上的「本地估算合计」一起记进账本（`$DSH_HOME/token-cost/ledger.json`），有两次以上快照就能算出：
+
+- 这段时间官方扣了多少：`balanceFrom − balanceTo`
+- 本地估算涨了多少：`localTo − localFrom`
+- 差多少：`+` 表示本地多算，`−` 表示本地少算
+
+余额要联网才查（默认关闭，见「口径与安全设计 › 联网与凭据」）；只有一次快照时不显示对账差。
 
 ## 口径与安全设计
 
@@ -143,6 +153,33 @@ const PRICES = {
 > （Search、Fetch 各 5 元 / 1000 次）不计入；折扣、赠送额度、图片/文件计价也感知不到。
 > 另外 `dsh-token-meter` 的文本计量本身是「每 token 四字符」的固定启发式，对 CJK 与 JSON 会低估。
 > 要对账请以官方账单为准，或直接改上面那张表。
+
+### 联网与凭据
+
+默认**不联网**。要开「计价自动更新」和「官方余额对账」，在 profile 的 patch 层给这个插件加一段配置（`cordis.patch.yml`）：
+
+```yaml
+- id: token-cost
+  name: dsh-token-cost
+  config:
+    network:
+      pricing: true    # 每 24h 拉一次 pricing.json：官方调价后不用等插件发版
+      balance: true    # 打开面板时查官方余额（60s 缓存）
+    balance:
+      readCredentials: true  # 没配 apiKey、环境变量也没有时，才去读 DSH 凭据库
+```
+
+开启后只访问两个地址：`raw.githubusercontent.com` 上的 `pricing.json`（取价目表）和 `api.deepseek.com/user/balance`（取余额）。API key 的查找顺序：
+
+1. `balance.apiKey`（配置里直接写）
+2. 环境变量（默认 `DEEPSEEK_API_KEY`，可用 `balance.apiKeyEnv` 改名）
+3. `readCredentials: true` 时，读 `$DSH_HOME/.credentials.yaml` 里同名 ref
+
+三处都拿不到就只显示 `—`，**不会**发请求。key 只在查余额时当 `Authorization` 头用，不落盘、不进日志。
+
+### 计价规则自动更新
+
+价目表在仓库根目录的 `pricing.json`（含模型单价、高峰/空闲规则、更新时间和来源链接）。Host 每 24 小时拉一次，缓存到 `$DSH_HOME/token-cost/pricing.json`；远程拿不到就退回缓存，再退回插件内置表。所以官方调价后只要改一次 `pricing.json`，所有用户下一次打开面板就用新价，**不用等插件发版**。
 
 ## 安装
 
@@ -233,10 +270,14 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 - **已删除/已归档、不在会话列表里的会话取不到数据**，不计入合计。
 - **上下文占用是参考值**：`projectedTokens` 含启发式误差，与内置圆环同源，不等于计费规模。
 - **每次列表更新最多自动取证 48 个冷会话**，其余需要点一次「载入其余会话」。
+- **对账要两次以上快照才有数。** 第一次查余额只记录基线；同一个 API key 被别的程序、别的机器用掉的钱也会算进余额差，所以偏差不一定是本插件算错。
+- **法定节假日按工作日算。** 没有节假日表，节假日当天会按高峰价算 —— 只会多算，不会少算。
 
 ## 版本
 
 最新在最上。版本号取自各提交里的 `package.json`，日期是 git 提交日期。
+
+- **v2.0.0**（2026-11-08）：新增两件联网能力（默认关闭）—— ① **计价规则自动更新**：价目表抽成仓库根的 `pricing.json`，Host 每 24h 拉一次并缓存，官方调价后不用等发版；② **官方余额对账**：面板显示官方余额与「本地估算 vs 官方扣费」的偏差，账本落在 `$DSH_HOME/token-cost/ledger.json`。API key 查找顺序：配置 → 环境变量 → （显式允许时）DSH 凭据库。新增路由 `/token-cost/pricing`、`/token-cost/balance`。
 
 - **v1.8.0**（2026-11-08）：费用从「单一价格」改为**官方分时定价**（高峰/空闲两档）——`deepseek-flash` 空闲 1/4/0.02 元、高峰 2/8/0.04 元（缓存未命中/输出/缓存命中，每百万 token）；`deepseek-v4-pro` 改为自己的真实单价（空闲 4.5/13.5/0.15、高峰 9/27/0.3）。此前表里 flash 与 pro 同价、且缓存未命中按 0.4 元算，导致金额明显偏低。高峰判定按北京时间周一至周五 09:00–12:00、14:00–18:00；法定节假日不判断（只会多算）。
 

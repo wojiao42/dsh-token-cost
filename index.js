@@ -13,12 +13,235 @@
  * 走 `ctx.sessionQuery.readSession()`：活跃会话读 live 日志，冷会话读持久化日志，返回已验证的克隆事件。
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
 /** 默认返回的轮数上限：预览要能点到任何一轮，所以默认就把全部轮次带上（每轮只有摘要+用量）。 */
 const DEFAULT_LIMIT = 200;
 /** 轮数上限的硬顶。 */
 const MAX_LIMIT = 200;
 /** 同一会话的折叠结果缓存时长：避免鼠标扫过时反复读日志。 */
 const CACHE_TTL_MS = 15_000;
+
+/** 计价规则与官方余额对账（都需要联网，默认关闭，由配置里的 network 打开）。 */
+const PRICING_URL_DEFAULT = 'https://raw.githubusercontent.com/wojiao42/dsh-token-cost/main/pricing.json';
+const BALANCE_URL = 'https://api.deepseek.com/user/balance';
+const PRICING_TTL_MS = 24 * 60 * 60 * 1000;
+const BALANCE_TTL_MS = 60 * 1000;
+const SNAPSHOT_MIN_GAP_MS = 30 * 60 * 1000;
+const MAX_SNAPSHOTS = 500;
+const NET_TIMEOUT_MS = 8000;
+
+/** 兜底计价表：远程拿不到时用它（与仓库里的 pricing.json 同结构）。 */
+export const EMBEDDED_PRICING = {
+  version: 1,
+  updatedAt: '2026-11-08T06:30:00Z',
+  source: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/',
+  currency: 'CNY',
+  unit: 'per_million_tokens',
+  peakRule: { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[9, 12], [14, 18]] },
+  models: {
+    'deepseek-flash': {
+      idle: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
+      peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 },
+    },
+    'deepseek-v4-pro': {
+      idle: { cacheHit: 0.15, cacheMiss: 4.5, output: 13.5 },
+      peak: { cacheHit: 0.3, cacheMiss: 9, output: 27 },
+    },
+  },
+};
+
+function stateDir() {
+  const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+  return join(home, 'token-cost');
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+function writeJson(file, value) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  } catch {
+    /* 落盘失败不影响主流程 */
+  }
+}
+
+function looksLikePricing(doc) {
+  return (
+    doc !== null &&
+    typeof doc === 'object' &&
+    doc.models !== null &&
+    typeof doc.models === 'object' &&
+    Object.values(doc.models).every(
+      (entry) => entry !== null && typeof entry === 'object' && entry.idle !== undefined && entry.peak !== undefined,
+    )
+  );
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NET_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 计价规则：优先用远程 pricing.json（24h TTL，落盘缓存），拿不到退回缓存，再退回内置表。
+ * 只在配置 network.pricing === true 时才联网。
+ */
+async function pricingDoc(config, { force = false } = {}) {
+  const file = join(stateDir(), 'pricing.json');
+  const cached = readJson(file);
+  const online = config?.network?.pricing === true;
+  const fresh =
+    cached !== undefined && typeof cached.fetchedAt === 'number' && Date.now() - cached.fetchedAt < PRICING_TTL_MS;
+  if (fresh && force !== true) return { doc: cached.doc, source: 'cache', fetchedAt: cached.fetchedAt };
+  if (!online) {
+    const fallback = cached?.doc ?? EMBEDDED_PRICING;
+    return { doc: fallback, source: cached ? 'cache' : 'embedded', fetchedAt: cached?.fetchedAt ?? null };
+  }
+  try {
+    const res = await fetchWithTimeout(config?.network?.pricingUrl ?? PRICING_URL_DEFAULT, {
+      headers: { accept: 'application/json', 'user-agent': 'dsh-token-cost' },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const doc = await res.json();
+    if (!looksLikePricing(doc)) throw new Error('pricing.json 结构不认识');
+    const record = { fetchedAt: Date.now(), doc };
+    writeJson(file, record);
+    return { doc, source: 'remote', fetchedAt: record.fetchedAt };
+  } catch (error) {
+    const fallback = cached?.doc ?? EMBEDDED_PRICING;
+    return {
+      doc: fallback,
+      source: cached ? 'cache' : 'embedded',
+      fetchedAt: cached?.fetchedAt ?? null,
+      error: String(error?.message ?? error),
+    };
+  }
+}
+
+/** 找 API key：显式配置 → 环境变量 → （仅在允许时）DSH 凭据库里的 refs.DEEPSEEK_API_KEY。 */
+export function resolveApiKey(config, env = process.env) {
+  const cfg = config?.balance ?? {};
+  if (typeof cfg.apiKey === 'string' && cfg.apiKey.trim() !== '') return { key: cfg.apiKey.trim(), source: 'config' };
+  const envName = typeof cfg.apiKeyEnv === 'string' && cfg.apiKeyEnv !== '' ? cfg.apiKeyEnv : 'DEEPSEEK_API_KEY';
+  const fromEnv = env[envName];
+  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') return { key: fromEnv.trim(), source: 'env' };
+  if (cfg.readCredentials !== true) return undefined;
+  try {
+    const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+    const text = readFileSync(join(home, '.credentials.yaml'), 'utf8');
+    const matcher = new RegExp('^\\s*' + envName + ':\\s*(\\S+)\\s*$', 'm');
+    const matched = text.match(matcher);
+    if (matched !== null && /^sk-/.test(matched[1])) return { key: matched[1], source: 'credentials' };
+  } catch {
+    /* 凭据文件不存在或读不到 */
+  }
+  return undefined;
+}
+
+/** 官方余额：60s 缓存；每次都把 {余额, 本地估算} 记进账本，用来算对账偏差。 */
+async function balancePayload(config, localTotal) {
+  const file = join(stateDir(), 'ledger.json');
+  const ledger = readJson(file) ?? { snapshots: [] };
+  const online = config?.network?.balance === true;
+  if (!online) {
+    return { enabled: false, reason: 'network.balance 未开启', snapshots: ledger.snapshots.slice(-20) };
+  }
+  const resolved = resolveApiKey(config);
+  if (resolved === undefined) {
+    return {
+      enabled: true,
+      ok: false,
+      reason: '找不到 API key（配置 apiKey / 环境变量 / 凭据库三处都没拿到）',
+      snapshots: ledger.snapshots.slice(-20),
+    };
+  }
+  const last = ledger.snapshots[ledger.snapshots.length - 1];
+  const cacheFresh = last !== undefined && typeof last.at === 'number' && Date.now() - last.at < BALANCE_TTL_MS;
+  if (cacheFresh && last.local === localTotal) {
+    return { ...last, enabled: true, ok: true, cached: true, snapshots: ledger.snapshots.slice(-20) };
+  }
+  try {
+    const res = await fetchWithTimeout(config?.balance?.url ?? BALANCE_URL, {
+      headers: { authorization: 'Bearer ' + resolved.key, accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const body = await res.json();
+    const info = Array.isArray(body?.balance_infos) ? body.balance_infos[0] : undefined;
+    const snapshot = {
+      at: Date.now(),
+      currency: info?.currency ?? 'CNY',
+      total: info === undefined ? null : Number(info.total_balance),
+      granted: info === undefined ? null : Number(info.granted_balance),
+      toppedUp: info === undefined ? null : Number(info.topped_up_balance),
+      local: typeof localTotal === 'number' && Number.isFinite(localTotal) ? localTotal : null,
+      available: body?.is_available === true,
+    };
+    const previous = ledger.snapshots[ledger.snapshots.length - 1];
+    const tooSoon =
+      previous !== undefined &&
+      typeof previous.at === 'number' &&
+      Date.now() - previous.at < SNAPSHOT_MIN_GAP_MS &&
+      previous.total === snapshot.total;
+    if (!tooSoon) {
+      ledger.snapshots.push(snapshot);
+      if (ledger.snapshots.length > MAX_SNAPSHOTS) ledger.snapshots = ledger.snapshots.slice(-MAX_SNAPSHOTS);
+      writeJson(file, ledger);
+    }
+    return {
+      ...snapshot,
+      enabled: true,
+      ok: true,
+      keySource: resolved.source,
+      drift: driftOf(ledger.snapshots),
+      snapshots: ledger.snapshots.slice(-20),
+    };
+  } catch (error) {
+    return { enabled: true, ok: false, reason: String(error?.message ?? error), snapshots: ledger.snapshots.slice(-20) };
+  }
+}
+
+/** 对账：官方余额下降多少 vs 本地估算增加多少。gap > 0 表示本地多算。 */
+export function driftOf(snapshots) {
+  const usable = (snapshots ?? []).filter(
+    (entry) =>
+      entry !== null &&
+      typeof entry === 'object' &&
+      typeof entry.total === 'number' &&
+      typeof entry.local === 'number',
+  );
+  if (usable.length < 2) return null;
+  const first = usable[0];
+  const last = usable[usable.length - 1];
+  const spentOfficial = first.total - last.total;
+  const spentLocal = last.local - first.local;
+  return {
+    since: first.at,
+    until: last.at,
+    samples: usable.length,
+    balanceFrom: first.total,
+    balanceTo: last.total,
+    localFrom: first.local,
+    localTo: last.local,
+    spentOfficial,
+    spentLocal,
+    gap: spentLocal - spentOfficial,
+  };
+}
 
 export const name = 'token-cost';
 
@@ -286,6 +509,64 @@ export function apply(ctx, config = {}) {
           },
         }),
       'token-cost: per-turn usage route',
+    );
+
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: '/token-cost/pricing',
+          handler: async (request, response) => {
+            if (request.method !== 'GET' && request.method !== 'HEAD') {
+              response.writeHead(405, { allow: 'GET, HEAD' });
+              response.end();
+              return;
+            }
+            const url = new URL(request.url ?? '/', 'http://localhost');
+            try {
+              const payload = await pricingDoc(config, { force: url.searchParams.get('refresh') === '1' });
+              if (request.method === 'HEAD') {
+                response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+                response.end();
+                return;
+              }
+              sendJson(response, 200, payload);
+            } catch (error) {
+              sendJson(response, 500, { error: String(error?.message ?? error) });
+            }
+          },
+        }),
+      'token-cost: pricing route',
+    );
+
+    host.effect(
+      () =>
+        host.webServer.register({
+          kind: 'exact',
+          path: '/token-cost/balance',
+          handler: async (request, response) => {
+            if (request.method !== 'GET' && request.method !== 'HEAD') {
+              response.writeHead(405, { allow: 'GET, HEAD' });
+              response.end();
+              return;
+            }
+            const url = new URL(request.url ?? '/', 'http://localhost');
+            const rawLocal = Number(url.searchParams.get('local'));
+            const localTotal = Number.isFinite(rawLocal) ? rawLocal : undefined;
+            try {
+              const payload = await balancePayload(config, localTotal);
+              if (request.method === 'HEAD') {
+                response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+                response.end();
+                return;
+              }
+              sendJson(response, 200, payload);
+            } catch (error) {
+              sendJson(response, 500, { error: String(error?.message ?? error) });
+            }
+          },
+        }),
+      'token-cost: balance route',
     );
   });
 }

@@ -9,7 +9,7 @@ Live token usage and estimated cost in the DSH sidebar: every session combined p
 task, with a per-session breakdown and per-turn preview on hover. Cost comes from an editable
 price table; the plugin adds no model calls, prompts or tools.
 
-[![version](https://img.shields.io/badge/version-1.8.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## What it does
@@ -59,6 +59,8 @@ Then hover the sidebar badge to see the breakdown.
   the load-remaining button in the panel footer.
 - Context occupancy includes heuristic error; it is a reference value, not the billed size.
 - No model requests are added: the plugin only reads local Host projections.
+- **Price table auto-updates:** `pricing.json` in the repo root is fetched every 24 h (cached); changing it updates every user without a plugin release.
+- **Balance reconciliation:** with `network.balance: true` the panel shows the official DeepSeek balance plus the drift between the local estimate and the official deduction. Two or more snapshots are needed before a drift appears; spending from other apps on the same API key lands in that gap too.
 
 ## Compatibility
 

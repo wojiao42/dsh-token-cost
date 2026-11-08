@@ -126,7 +126,7 @@ assertEqual('a turn without reported usage stays null',
   [null]);
 
 // ── 路由契约：假 ctx + 假 sessionQuery，验证 HTTP 层与返回结构 ──────────────
-let route;
+const routes = new Map();
 let reads = 0;
 const queryStub = {
   async readSession(sessionId) {
@@ -152,7 +152,7 @@ apply(
       callback({
         webServer: {
           register(spec) {
-            route = spec;
+            routes.set(spec.path, spec);
             return () => {};
           },
         },
@@ -161,7 +161,7 @@ apply(
   },
   { fold: (events) => ({ uncachedInputTokens: events.length }) },
 );
-assert('apply registers one exact route', route?.kind === 'exact' && route?.path === '/token-cost/turns');
+assert('apply registers the turns route', routes.get('/token-cost/turns')?.kind === 'exact');
 
 const fakeResponse = () => {
   const state = { status: 0, body: '' };
