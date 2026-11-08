@@ -175,6 +175,9 @@ window.__ModuleLoader__.load({
       drift: '对账差',
       granted: '赠送',
       toppedUp: '充值',
+      officialTotal: '官方累计',
+      localTotal: '本地累计',
+      gap: '差',
       ago: '最近',
       turnsTitle: '逐轮用量',
       turn: '第',
@@ -215,6 +218,9 @@ window.__ModuleLoader__.load({
       drift: 'Drift',
       granted: 'granted',
       toppedUp: 'topped up',
+      officialTotal: 'Official total',
+      localTotal: 'Local total',
+      gap: 'Gap',
       ago: 'last',
       turnsTitle: 'Per-turn usage',
       turn: 'turn',
@@ -1305,6 +1311,23 @@ window.__ModuleLoader__.load({
                   : null,
                 net !== null && net.ok === true && net.drift !== null
                   ? h('span', { className: 'tcs-net' }, tr('drift') + ' ' + fmtSigned(net.drift.gap))
+                  : null,
+                net !== null && net.ok === true && typeof net.cumulativeGap === 'number'
+                  ? h(
+                      'span',
+                      { className: 'tcs-net', title: tr('officialTotal') + ' ' + fmtMoney(net.officialTotalCost) },
+                      tr('officialTotal') +
+                        ' ' +
+                        fmtMoney(net.officialTotalCost) +
+                        ' / ' +
+                        tr('localTotal') +
+                        ' ' +
+                        fmtMoney(net.local) +
+                        ' / ' +
+                        tr('gap') +
+                        ' ' +
+                        fmtSigned(net.cumulativeGap),
+                    )
                   : null,
               ),
               h(

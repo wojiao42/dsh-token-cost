@@ -29,6 +29,9 @@ const usageCache = new Map();
 
 /** 会话真实费用（逐事件定价）的缓存。 */
 const costCache = new Map();
+
+/** Platform 账号汇总（余额 + 官方累计花费）的短缓存。 */
+const accountSummaryCache = new Map();
 const COST_TTL_MS = 10 * 60 * 1000;
 
 /** 计价规则与官方余额对账（都需要联网，默认关闭，由配置里的 network 打开）。 */
@@ -190,6 +193,66 @@ function asFinite(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/**
+ * 从 DSH 凭据库里取 Platform 账号授权令牌（deepseek-account-platform/default 的 grant）。
+ * 只有显式允许（balance.readCredentials === true）时才读。
+ */
+function resolveAccountToken(config, env = process.env) {
+  const cfg = config?.balance ?? {}
+  if (typeof cfg.accountToken === 'string' && cfg.accountToken.trim() !== '') {
+    return { token: cfg.accountToken.trim(), source: 'config' }
+  }
+  if (cfg.readCredentials !== true) return undefined
+  try {
+    const home = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+    const text = readFileSync(join(home, '.credentials.yaml'), 'utf8')
+    const section = text.split('deepseek-account-platform/default:')[1] ?? ''
+    const matched = section.match(/token:\s*(\S+)/)
+    if (matched !== null && matched[1].length >= 16) return { token: matched[1], source: 'credentials' }
+  } catch {
+    /* 凭据文件不存在或读不到 */
+  }
+  return undefined
+}
+
+/**
+ * 官方账号汇总：余额（充值 / 赠送）+ **官方累计花费 total_costs**。
+ * 比对「官方余额」更有用的对账基准是 total_costs —— 它和本地累计花费是同一量纲，
+ * 一次读取就能算出偏差，不需要等两个快照。
+ */
+async function platformSummary(config) {
+  const resolved = resolveAccountToken(config)
+  if (resolved === undefined) return undefined
+  const cached = accountSummaryCache.get('summary')
+  if (cached !== undefined && Date.now() - cached.at < BALANCE_TTL_MS) return cached.value
+  const res = await fetchWithTimeout(config?.balance?.platformUrl ?? 'https://platform.deepseek.com/api/v0/users/get_user_summary', {
+    headers: {
+      'x-dsh-auth-token': resolved.token,
+      accept: 'application/json',
+      'user-agent': 'dsh-token-cost',
+    },
+  })
+  if (!res.ok) throw new Error('HTTP ' + res.status)
+  const body = await res.json()
+  const biz = body?.data?.biz_data
+  if (biz === null || biz === undefined) throw new Error(body?.data?.biz_msg ?? body?.msg ?? 'unexpected platform payload')
+  const wallet = Array.isArray(biz.normal_wallets) ? biz.normal_wallets[0] : undefined
+  const bonus = Array.isArray(biz.bonus_wallets) ? biz.bonus_wallets[0] : undefined
+  const costs = Array.isArray(biz.total_costs) ? biz.total_costs[0] : undefined
+  const snapshot = {
+    at: Date.now(),
+    currency: wallet?.currency ?? 'CNY',
+    total: wallet === undefined ? null : Number(wallet.balance),
+    granted: bonus === undefined ? null : Number(bonus.balance),
+    toppedUp: wallet === undefined ? null : Number(wallet.balance),
+    officialTotalCost: costs === undefined ? null : Number(costs.amount),
+    available: true,
+    source: 'platform',
+  }
+  accountSummaryCache.set('summary', { at: snapshot.at, value: snapshot })
+  return snapshot
+}
+
 /** 找 API key：显式配置 → 环境变量 → （仅在允许时）DSH 凭据库里的 refs.DEEPSEEK_API_KEY。 */
 export function resolveApiKey(config, env = process.env) {
   const cfg = config?.balance ?? {};
@@ -217,6 +280,24 @@ async function balancePayload(config, localTotal) {
   const online = config?.network?.balance === true;
   if (!online) {
     return { enabled: false, reason: 'network.balance 未开启', snapshots: ledger.snapshots.slice(-20) };
+  }
+  // 优先用 Platform 账号汇总：它同时给出余额与官方累计花费（total_costs），
+  // 后者与本地累计是同一量纲，一次读取就能对账。
+  try {
+    const platform = await platformSummary(config);
+    if (platform !== undefined) {
+      const local = typeof localTotal === 'number' && Number.isFinite(localTotal) ? localTotal : null;
+      return {
+        ...platform,
+        enabled: true,
+        ok: true,
+        local,
+        cumulativeGap:
+          local !== null && typeof platform.officialTotalCost === 'number' ? local - platform.officialTotalCost : null,
+      };
+    }
+  } catch {
+    /* Platform 读不到就退回 API key + /user/balance */
   }
   const resolved = resolveApiKey(config);
   if (resolved === undefined) {

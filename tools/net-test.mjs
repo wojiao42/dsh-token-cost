@@ -243,6 +243,47 @@ assertEqual('按每个事件自己的时间取档：peak 1M 输入 2 元 + idle 
 assertEqual('同时回报 token 汇总与模型', [costA?.usage?.outputTokens, costA?.model], [1_000_000, 'deepseek-flash'])
 assertEqual('缺 ids 报 400', (await call('/token-cost/costs')).status, 400)
 
+
+// ── Platform 账号汇总：余额 + 官方累计花费（total_costs）对账 ─────────
+fs.appendFileSync(
+  path.join(HOME, '.credentials.yaml'),
+  'deepseek-account-platform/default:\n  kind: grant\n  payload:\n    token: account-grant-token-1234567890\n',
+)
+routes = new Map()
+apply(
+  {
+    get: () => undefined,
+    inject: (names, callback) =>
+      callback({ webServer: { register(spec) { routes.set(spec.path, spec); return () => {} } }, effect: (fn) => fn() }),
+  },
+  { network: { balance: true }, balance: { readCredentials: true } },
+)
+fetchImpl = async (url) => {
+  if (String(url).includes('get_user_summary')) {
+    return {
+      ok: true,
+      json: async () => ({
+        code: 0,
+        msg: '',
+        data: {
+          biz_code: 0,
+          biz_msg: '',
+          biz_data: {
+            normal_wallets: [{ currency: 'CNY', balance: '19.1158860800' }],
+            bonus_wallets: [{ currency: 'CNY', balance: '0' }],
+            total_costs: [{ currency: 'CNY', amount: '94.1760941200' }],
+          },
+        },
+      }),
+    }
+  }
+  return { ok: false, status: 500, json: async () => ({}) }
+}
+const platformBalance = await call('/token-cost/balance?local=91.675')
+assertEqual('优先用 Platform 汇总：余额 = 充值余额', [platformBalance.body.ok, platformBalance.body.source, Number(platformBalance.body.total.toFixed(2))], [true, 'platform', 19.12])
+assertEqual('官方累计花费读出来了', Number(platformBalance.body.officialTotalCost.toFixed(2)), 94.18)
+assertEqual('一次读取就能算累计偏差（本地 − 官方）', Number(platformBalance.body.cumulativeGap.toFixed(3)), -2.501)
+
 fs.rmSync(HOME, { recursive: true, force: true })
 console.log(`\n${failed === 0 ? '全部通过' : failed + ' 项失败'}`)
 process.exitCode = failed === 0 ? 0 : 1
