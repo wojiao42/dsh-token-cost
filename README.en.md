@@ -9,7 +9,7 @@ Live token usage and estimated cost in the DSH sidebar: every session combined p
 task, with a per-session breakdown and per-turn preview on hover. Cost comes from an editable
 price table; the plugin adds no model calls, prompts or tools.
 
-[![version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-1.8.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## What it does
@@ -26,6 +26,9 @@ price table; the plugin adds no model calls, prompts or tools.
 - The per-turn preview returns all turns by default (`limit` defaults to 200, max 200).
 - Cost = uncached input × `cacheMiss` + (cache read + cache write) × `cacheHit` + output ×
   `output`, looked up per model in a table at the top of `client.js` (CNY per million tokens).
+Prices are **time-of-day tiered** since 2026-09-10 (peak / idle; idle is half of peak):
+peak = Mon–Fri 09:00–12:00 and 14:00–18:00 Beijing time, everything else (weekends included) is idle.
+Chinese statutory holidays are not detected, so a holiday is priced at the peak rate — over-counted, never under.
 - Everything comes from existing session projections (`tokenUsage` / `contextPressure` /
   `modelSelection`); the official `dsh-token-meter` provides the usage figures.
 
@@ -47,7 +50,7 @@ Then hover the sidebar badge to see the breakdown.
 
 ## Key limits
 
-- **Estimates, not a bill.** Default prices follow public pricing; discounts, credits, billing
+- **Estimates, not a bill.** Default prices follow public pricing and the peak/idle schedule; discounts, credits, billing
   tiers and image/file pricing are invisible to the plugin. The meter itself uses a
   four-characters-per-token heuristic and underestimates CJK and JSON. Reconcile against the
   official bill, or edit the price table.

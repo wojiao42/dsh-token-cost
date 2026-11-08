@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-1.7.2-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-1.8.0-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -113,22 +113,36 @@
 
 ### 单价与费用
 
-费用 = 未缓存输入 × `cacheMiss` +（缓存读 + 缓存写）× `cacheHit` + 输出 × `output`，
-按当前模型查表。表在 `client.js` 顶部：
+费用 = 未缓存输入 × `cacheMiss` +（缓存读 + 缓存写）× `cacheHit` + 输出 × `output`，按当前模型查表。
+
+官方自 **2026-09-10** 起改成分时定价（高峰 / 空闲两档，空闲价是高峰的一半），表也跟着分档，表在 `client.js` 顶部：
 
 ```js
 const PRICES = {
-  'deepseek-flash': { cacheHit: 0.02, cacheMiss: 0.4, output: 4 },
-  'deepseek-v4-pro': { cacheHit: 0.02, cacheMiss: 0.4, output: 4 },
+  'deepseek-flash': {
+    idle: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
+    peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 },
+  },
+  'deepseek-v4-pro': {
+    idle: { cacheHit: 0.15, cacheMiss: 4.5, output: 13.5 },
+    peak: { cacheHit: 0.3, cacheMiss: 9, output: 27 },
+  },
 };
 ```
 
-单位是**人民币元 / 每百万 token**。表里没有的模型只显示 token 与占用，费用列显示 `—`
-并在面板里提示未计入。
+单位是**人民币元 / 每百万 token**。高峰 = **北京时间周一至周五 09:00–12:00、14:00–18:00**，
+其余时段（含周末全天）按空闲价。判定用的是每一轮 / 每个会话的时间戳：一轮跨档位时按**开始时间**算，
+会话合计按**最后活动时间**算，所以跨档位的长会话会有小额误差。
 
-> **这是估算值，不是账单。** 默认单价按公开调价信息填写；插件也无法感知折扣、赠送额度、
-> 不同计费档位与图片/文件计价。`dsh-token-meter` 的文本计量本身是「每 token 四字符」的
-> 固定启发式规则，对 CJK 与 JSON 会低估。要对账请以官方账单为准，或按实际价格改表。
+> **中国法定节假日没有判断**（没有节假日表），节假日当天会按工作日算成高峰 —— 只会多算，不会少算。
+> 单价来源：<https://api-docs.deepseek.com/zh-cn/quick_start/pricing/>
+
+表里没有的模型只显示 token 与占用，费用列显示 `—` 并在面板里提示未计入。
+
+> **这是估算值，不是账单。** 插件只统计模型调用的 token 费用，**网页搜索 / 抓取**
+> （Search、Fetch 各 5 元 / 1000 次）不计入；折扣、赠送额度、图片/文件计价也感知不到。
+> 另外 `dsh-token-meter` 的文本计量本身是「每 token 四字符」的固定启发式，对 CJK 与 JSON 会低估。
+> 要对账请以官方账单为准，或直接改上面那张表。
 
 ## 安装
 
@@ -223,6 +237,8 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。版本号取自各提交里的 `package.json`，日期是 git 提交日期。
+
+- **v1.8.0**（2026-11-08）：费用从「单一价格」改为**官方分时定价**（高峰/空闲两档）——`deepseek-flash` 空闲 1/4/0.02 元、高峰 2/8/0.04 元（缓存未命中/输出/缓存命中，每百万 token）；`deepseek-v4-pro` 改为自己的真实单价（空闲 4.5/13.5/0.15、高峰 9/27/0.3）。此前表里 flash 与 pro 同价、且缓存未命中按 0.4 元算，导致金额明显偏低。高峰判定按北京时间周一至周五 09:00–12:00、14:00–18:00；法定节假日不判断（只会多算）。
 
 - **v1.7.2**（2026-10-08）：逐轮预览不再截断到最近 30 轮，面板可滚动，早轮也能点到。
 - **v1.7.1**（2026-10-08）：徽标底色只在悬停时出现，展开/钉住后不再留底色。

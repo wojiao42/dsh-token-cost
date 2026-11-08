@@ -210,7 +210,7 @@ const badgeKeys = badgeNodes.filter((entry) => entry.className === 'tcs-key').ma
 const badgeValues = badgeNodes.filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
 assertEqual('badge shows two compact lines: total, then the current task',
   [badgeKeys, badgeValues.map(clockless)],
-  [['全部', '当前'], ['≈¥0.00658', '≈¥0.00258 · 50.0%']]);
+  [['全部', '当前'], ['≈¥0.0167', '≈¥0.00318 · 50.0%']]);
 assert('the badge no longer carries the as-of clock', !/截至/.test(badgeValues.join(' ')));
 assert('a running session shows as a dot on the total line',
   collect(badge).some((entry) => entry.className === 'tcs-dot' && entry.node.props['data-running'] === 'true'));
@@ -219,7 +219,7 @@ assert('no portal while collapsed', portals.length === 0);
 
 // --- narrow (collapsed sidebar)
 const narrow = render({ useSessions, t, openSession: () => {}, wide: false });
-assert('narrow badge shows money only', collect(narrow).find((entry) => entry.className === 'tcs-label').text === '≈¥0.00658');
+assert('narrow badge shows money only', collect(narrow).find((entry) => entry.className === 'tcs-label').text === '≈¥0.0167');
 
 // --- expanded panel
 hooks.length = 0;
@@ -230,7 +230,7 @@ const expanded = render({ useSessions, t, openSession: (id) => opened.push(id), 
 const nodes = collect(expanded);
 const byClass = (className) => nodes.filter((entry) => entry.className === className);
 assert('panel is portalled to document.body', portals.length === 1 && portals[0].container === global.document.body);
-assert('panel head shows estimate', byClass('tcs-headValue')[0].text === '≈¥0.00658');
+assert('panel head shows estimate', byClass('tcs-headValue')[0].text === '≈¥0.0167');
 const meta = byClass('tcs-meta')[0].node.children.filter((child) => child !== null).map((child) => child.children.join(''));
 const rows = byClass('tcs-row');
 assertEqual('meta line reports sessions/running/cache/occupancy', meta.slice(0, 4), ['4 会话', '2 运行中', '缓存命中率 75.0%', '≤50.0%']);
@@ -245,7 +245,7 @@ assertEqual('rows sorted running-first then by cost',
   rows.map((entry) => entry.node.props.title.split(' · ')[0]),
   ['主任务', '并行任务', '旧会话', 'd']);
 assert('row shows tokens and money', collect(rows[0].node).find((entry) => entry.className === 'tcs-tokens').text === '10.5k' &&
-  collect(rows[0].node).find((entry) => entry.className === 'tcs-money').text === '≈¥0.00258');
+  collect(rows[0].node).find((entry) => entry.className === 'tcs-money').text === '≈¥0.00318');
 assert('running row shows occupancy', collect(rows[0].node).find((entry) => entry.className === 'tcs-percent').text === '50.0%');
 const detailOf = (entry) => collect(entry.node).find((node) => node.className === 'tcs-detail')?.text ?? '';
 assert('running row carries elapsed time, turns/steps, ttft, llm/tool time and decode speed',
@@ -253,7 +253,7 @@ assert('running row carries elapsed time, turns/steps, ttft, llm/tool time and d
 assert('idle row carries relative activity time', detailOf(rows[2]) === '最近 3m · 3轮 5步 · 首token 1.0s · 模型 40s · 15.0 tok/s');
 assert('row without sessionStats still shows activity only', /^运行中 \d+s$/.test(detailOf(rows[1])));
 assert('unpriced row shows dash', collect(rows[1].node).find((entry) => entry.className === 'tcs-money').text === '—');
-assert('idle row keeps its cost', collect(rows[2].node).find((entry) => entry.className === 'tcs-money').text === '≈¥0.00400');
+assert('idle row keeps its cost', collect(rows[2].node).find((entry) => entry.className === 'tcs-money').text === '≈¥0.0135');
 assert('unpriced hint rendered', nodes.some((entry) => entry.className === 'tcs-hint' && entry.text === ZH.unpriced));
 assert('row click switches session', (() => {
   rows[0].node.props.onClick();
@@ -306,7 +306,7 @@ assert('missing useSessions degrades to nothing', noHook === null || noHook === 
 const fakeSource = { getSnapshot: () => SESSIONS, subscribe: () => () => {} };
 const viaSource = render({ t, wide: true, sessionsSource: fakeSource, openSession: () => {} });
 const viaSourceValues = collect(viaSource).filter((entry) => entry.className === 'tcs-value').map((entry) => entry.text);
-assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.00658', '≈¥0.00258 · 50.0%']);
+assertEqual('reads the session list from the injected source', viaSourceValues.slice(0, 2), ['≈¥0.0167', '≈¥0.00318 · 50.0%']);
 
 // --- 悬停展开（点击 = 钉住）
 globalThis.__FORCE_OPEN__ = false;
@@ -345,6 +345,25 @@ assertEqual('turnView falls back to a placeholder without a summary',
 assertEqual('turnView flags approximate turns',
   turnView({ turn: 6, startTime: 1000, endTime: 2000, steps: 1, closed: true, exact: false, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, flash, '进行中', '近似').when,
   '1s · ' + clock(1000) + ' · 1步 · 近似');
+// --- 分时定价（2026-09-10 起官方高峰/空闲两档）
+const { priceTierAt, costOf, PRICES } = plugin.__internals;
+// 2026-11-09 是周一（北京时间）
+const at = (iso) => Date.parse(iso);
+assertEqual('10:00 工作日算高峰', priceTierAt(at('2026-11-09T02:00:00Z')), 'peak');
+assertEqual('15:00 工作日算高峰', priceTierAt(at('2026-11-09T07:00:00Z')), 'peak'); // 北京 15:00
+assertEqual('12:30 午休算空闲', priceTierAt(at('2026-11-09T04:30:00Z')), 'idle'); // 北京 12:30
+assertEqual('19:00 算空闲', priceTierAt(at('2026-11-09T11:00:00Z')), 'idle'); // 北京 19:00
+assertEqual('周六全天算空闲', priceTierAt(at('2026-11-14T02:00:00Z')), 'idle'); // 北京周六 10:00
+const sample = { uncachedInputTokens: 1_000_000, cacheReadTokens: 1_000_000, cacheWriteTokens: 0, outputTokens: 1_000_000 };
+const idleCost = costOf(sample, PRICES['deepseek-flash'], at('2026-11-09T04:30:00Z'));
+const peakCost = costOf(sample, PRICES['deepseek-flash'], at('2026-11-09T02:00:00Z'));
+assertEqual('flash 空闲价 = 1 + 0.02 + 4 元/百万', Number(idleCost.total.toFixed(2)), 5.02);
+assertEqual('flash 高峰价 = 2 + 0.04 + 8 元/百万', Number(peakCost.total.toFixed(2)), 10.04);
+assertEqual('pro 空闲价 = 4.5 + 0.15 + 13.5 元/百万',
+  Number(costOf(sample, PRICES['deepseek-v4-pro'], at('2026-11-09T04:30:00Z')).total.toFixed(2)), 18.15);
+assertEqual('扁平价仍然可用（离线测试/自定义价格）',
+  Number(costOf(sample, { cacheHit: 0.02, cacheMiss: 0.4, output: 4 }).total.toFixed(2)), 4.42);
+
 assertEqual('turnView marks an unpriced model with a dash',
   turnView({ turn: 5, startTime: 1000, endTime: 2000, steps: 1, closed: true, usage: { uncachedInputTokens: 10, outputTokens: 5 } }, null, '进行中').amount,
   '—');
@@ -377,5 +396,5 @@ assertEqual('turnView marks an unpriced model with a dash',
   assertEqual('hovering a row fetches that session per-turn usage (no truncation)', urls, ['/token-cost/turns?sessionId=a']);
   globalThis.__FORCE_OPEN__ = false;
 
-  console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.00658');
+  console.log('\ntotals: 13,600 tokens across 4 sessions, 2 running, estimated ¥0.0167');
 })();

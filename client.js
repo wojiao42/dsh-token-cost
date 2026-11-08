@@ -9,10 +9,51 @@ window.__ModuleLoader__.load({
      * 官方价格变动时改这里，然后刷新页面即可生效（无需重启 Harness）。
      * 表里没有的模型只显示 token 数与上下文占用，不显示费用。
      * ==========================================================================*/
+    /**
+     * 官方单价（元 / 百万 tokens）。2026-09-10 起 DeepSeek 改成分时定价：
+     *   高峰 = 北京时间周一至周五 09:00–12:00、14:00–18:00（法定节假日除外）
+     *   空闲 = 其余时段（含周末全天）
+     * 中国法定节假日这里不判断（没有节假日表）：节假日会按工作日算成高峰 → 只会多算，不会少算。
+     * 来源：https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+     */
     const PRICES = {
-      'deepseek-flash': { cacheHit: 0.02, cacheMiss: 0.4, output: 4 },
-      'deepseek-v4-pro': { cacheHit: 0.02, cacheMiss: 0.4, output: 4 },
+      'deepseek-flash': {
+        idle: { cacheHit: 0.02, cacheMiss: 1, output: 4 },
+        peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 },
+      },
+      'deepseek-v4-pro': {
+        idle: { cacheHit: 0.15, cacheMiss: 4.5, output: 13.5 },
+        peak: { cacheHit: 0.3, cacheMiss: 9, output: 27 },
+      },
     };
+
+    /** 某个时刻落在高峰还是空闲档（毫秒时间戳；非法值按当前时刻）。 */
+    function priceTierAt(ms) {
+      const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now();
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Shanghai',
+        weekday: 'short',
+        hour: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date(at));
+      const get = (type) => {
+        const hit = parts.find((part) => part.type === type);
+        return hit === undefined ? undefined : hit.value;
+      };
+      const weekday = get('weekday');
+      const hour = Number(get('hour'));
+      const isWorkday = weekday !== 'Sat' && weekday !== 'Sun';
+      const inWindow = (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18);
+      return isWorkday && inWindow ? 'peak' : 'idle';
+    }
+
+    /** 价格表同时接受 {idle,peak} 分档与旧的扁平写法（离线测试与自定义价格用扁平）。 */
+    function resolvePrice(price, atMs) {
+      if (price === null || price === undefined) return null;
+      if (typeof price.cacheMiss === 'number') return price;
+      const tier = priceTierAt(atMs);
+      return price[tier] === undefined ? null : price[tier];
+    }
 
     const EMPTY = {
       uncachedInputTokens: 0,
@@ -49,15 +90,22 @@ window.__ModuleLoader__.load({
       return typeof model === 'string' && model.length > 0 ? model : null;
     };
 
-    const costOf = (usage, price) => {
-      if (price === null) return null;
+    const costOf = (usage, price, atMs) => {
+      const table = resolvePrice(price, atMs);
+      if (table === null) return null;
       const miss = asNumber(usage.uncachedInputTokens);
       const cache = asNumber(usage.cacheReadTokens) + asNumber(usage.cacheWriteTokens);
       const output = asNumber(usage.outputTokens);
-      const inputMiss = (miss / 1e6) * price.cacheMiss;
-      const cacheCost = (cache / 1e6) * price.cacheHit;
-      const outputCost = (output / 1e6) * price.output;
-      return { inputMiss, cache: cacheCost, output: outputCost, total: inputMiss + cacheCost + outputCost };
+      const inputMiss = (miss / 1e6) * table.cacheMiss;
+      const cacheCost = (cache / 1e6) * table.cacheHit;
+      const outputCost = (output / 1e6) * table.output;
+      return {
+        inputMiss,
+        cache: cacheCost,
+        output: outputCost,
+        total: inputMiss + cacheCost + outputCost,
+        tier: price !== null && typeof price.cacheMiss === 'number' ? 'flat' : priceTierAt(atMs),
+      };
     };
 
     /* 侧栏汇总：订阅会话列表快照（每个会话都带投影缓存），实时折叠出全部会话与当前任务的用量。 */
@@ -273,7 +321,7 @@ window.__ModuleLoader__.load({
       for (const id of [...runningSince.keys()]) if (!ids.has(id)) runningSince.delete(id);
     }
 
-    function sessionUsageOf(values) {
+    function sessionUsageOf(values, atMs) {
       const usage = values?.tokenUsage;
       const miss = asNumber(usage?.uncachedInputTokens);
       const cache = asNumber(usage?.cacheReadTokens) + asNumber(usage?.cacheWriteTokens);
@@ -289,7 +337,7 @@ window.__ModuleLoader__.load({
         output,
         billed: miss + cache + output,
         model,
-        cost: costOf(usage ?? EMPTY, price),
+        cost: costOf(usage ?? EMPTY, price, atMs),
         percent: contextWindow > 0 && used > 0 ? (used / contextWindow) * 100 : null,
         hasUsage: values?.tokenUsage !== undefined,
         stats: (() => {
@@ -324,7 +372,7 @@ window.__ModuleLoader__.load({
           running: row?.running === true,
           origin: row?.origin,
           updatedAt: asNumber(row?.updatedAt),
-          ...sessionUsageOf(values),
+          ...sessionUsageOf(values, asNumber(row?.updatedAt)),
         });
       };
       for (const id of list?.ids ?? []) {
@@ -433,7 +481,7 @@ window.__ModuleLoader__.load({
     /** 一轮用量的展示数据（纯函数，便于离线断言）。 */
     function turnView(turn, price, openLabel, approxLabel, untitledLabel) {
       const usage = turn.usage;
-      const cost = usage === null || usage === undefined ? null : costOf(usage, price);
+      const cost = usage === null || usage === undefined ? null : costOf(usage, price, turn.startTime);
       const billed =
         usage === null || usage === undefined
           ? null
@@ -1282,6 +1330,6 @@ window.__ModuleLoader__.load({
     }
 
     // __internals 只给离线测试用（插件加载器忽略额外字段）
-    return { name: 'token-cost', inject, apply, __internals: { turnView } };
+    return { name: 'token-cost', inject, apply, __internals: { turnView, costOf, priceTierAt, resolvePrice, PRICES } };
   },
 });
