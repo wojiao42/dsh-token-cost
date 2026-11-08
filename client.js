@@ -28,15 +28,33 @@ window.__ModuleLoader__.load({
     };
 
     /** 高峰规则：默认北京时间周一至周五 09:00–12:00、14:00–18:00，可被远程 pricing.json 覆盖。 */
-    let PEAK_RULE = { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[9, 12], [14, 18]] };
+    let PEAK_RULE = { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[9, 12], [14, 18]], holidays: [] };
     /** 当前价格来源：embedded / cache / remote。 */
     let pricingSource = 'embedded';
     let pricingUpdatedAt = null;
 
     /** 某个时刻落在高峰还是空闲档（毫秒时间戳；非法值按当前时刻）。 */
+    /** 某一时刻在峰谷规则时区里的日期键（YYYY-MM-DD），用于节假日判定。 */
+    function holidayKeyAt(ms) {
+      const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now();
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: PEAK_RULE.timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(new Date(at));
+      const get = (type) => {
+        const hit = parts.find((part) => part.type === type);
+        return hit === undefined ? undefined : hit.value;
+      };
+      return get('year') + '-' + get('month') + '-' + get('day');
+    }
+
     function priceTierAt(ms) {
       const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now();
       const rule = PEAK_RULE;
+      // 法定节假日全天按空闲价（与周末同档）
+      if (Array.isArray(rule.holidays) && rule.holidays.length > 0 && rule.holidays.includes(holidayKeyAt(at))) return 'idle';
       const parts = new Intl.DateTimeFormat('en-US', {
         timeZone: rule.timeZone,
         weekday: 'short',
@@ -79,6 +97,7 @@ window.__ModuleLoader__.load({
             timeZone: rule.timeZone,
             weekdays: Array.isArray(rule.weekdays) ? rule.weekdays : PEAK_RULE.weekdays,
             ranges: rule.ranges,
+            holidays: Array.isArray(rule.holidays) ? rule.holidays : PEAK_RULE.holidays,
           };
         }
         pricingSource = typeof payload.source === 'string' ? payload.source : pricingSource;

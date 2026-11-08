@@ -773,11 +773,34 @@ async function sessionCostPayload(ctx, config, sessionId) {
 }
 
 /** 按 peakRule 判断某个时刻是高峰还是空闲（与 pricing.json 的规则一致）。 */
+/**
+ * 某一时刻在指定时区里的日期键（`YYYY-MM-DD`），用于法定节假日判定。
+ * @param {number} ms 毫秒时间戳
+ * @param {string} zone IANA 时区
+ */
+export function holidayKeyAt(ms, zone) {
+  const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now()
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: zone ?? 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(at))
+  const get = (type) => {
+    const hit = parts.find((part) => part.type === type)
+    return hit === undefined ? undefined : hit.value
+  }
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
 export function peakTierAt(rule, ms) {
   const at = typeof ms === 'number' && Number.isFinite(ms) ? ms : Date.now()
   const zone = rule?.timeZone ?? 'Asia/Shanghai'
   const weekdays = Array.isArray(rule?.weekdays) ? rule.weekdays : [1, 2, 3, 4, 5]
   const ranges = Array.isArray(rule?.ranges) ? rule.ranges : [[9, 12], [14, 18]]
+  // 官方规则：法定节假日全天按空闲价（与周末同档）
+  const holidays = Array.isArray(rule?.holidays) ? rule.holidays : []
+  if (holidays.length > 0 && holidays.includes(holidayKeyAt(at, zone))) return 'idle'
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: zone,
     weekday: 'short',
