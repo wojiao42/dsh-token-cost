@@ -5,7 +5,7 @@
 侧栏底部常驻的**用量与费用账本**：全部会话合计 + 当前任务（有任务在跑时金额前一个绿点）。
 这份账目的**截至时刻**只在悬停展开的面板里显示。费用按可编辑的价目表估算；插件不新增任何模型调用、提示词或工具。
 
-[![version](https://img.shields.io/badge/version-2.1.1-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
+[![version](https://img.shields.io/badge/version-2.1.2-blue)](https://github.com/wojiao42/dsh-token-cost/releases)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ## 截图
@@ -288,6 +288,9 @@ node tools/verify-live.cjs           # 运行中的 Host 是否已在提供当�
 ## 版本
 
 最新在最上。
+
+- **v2.1.2**（2026-11-08）：余额行在有赠送余额时显示拆分（`赠送 ¥x / 充值 ¥y`）。因为「充值 − 余额」不等于真实花费——赠送余额优先扣减，不看拆分容易把差额误记成插件算错。
+
 
 - **v2.1.1**（2026-11-08）：**对账只在同一算法的快照之间算**。升级 v2.1.0 后「本地累计」的量纲从旧近似值（¥7 级）变成逐事件真值（¥90 级），跨算法相减会得到一个荒谬的对账差（+¥79.86）。现在每个账本快照带 `algo` 标记，`driftOf()` 只取最近同算法快照；没有标记的历史快照一律不参与。
 

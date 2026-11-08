@@ -173,6 +173,8 @@ window.__ModuleLoader__.load({
       asOf: '截至',
       balance: '余额',
       drift: '对账差',
+      granted: '赠送',
+      toppedUp: '充值',
       ago: '最近',
       turnsTitle: '逐轮用量',
       turn: '第',
@@ -211,6 +213,8 @@ window.__ModuleLoader__.load({
       asOf: 'as of',
       balance: 'Balance',
       drift: 'Drift',
+      granted: 'granted',
+      toppedUp: 'topped up',
       ago: 'last',
       turnsTitle: 'Per-turn usage',
       turn: 'turn',
@@ -1288,7 +1292,16 @@ window.__ModuleLoader__.load({
                 totals.decodeRate === null ? null : h('span', null, totals.decodeRate.toFixed(1) + ' tok/s'),
                 totals.avgTtft === null ? null : h('span', null, tr('ttft') + ' ' + fmtMs(totals.avgTtft)),
                 net !== null && net.enabled === true
-                  ? h('span', { className: 'tcs-net' }, tr('balance') + ' ' + (net.ok === true ? fmtMoney(net.total) : '—'))
+                  ? h(
+                      'span',
+                      { className: 'tcs-net' },
+                      tr('balance') +
+                        ' ' +
+                        (net.ok === true ? fmtMoney(net.total) : '—') +
+                        (net.ok === true && typeof net.granted === 'number' && net.granted > 0
+                          ? '（' + tr('granted') + ' ' + fmtMoney(net.granted) + ' / ' + tr('toppedUp') + ' ' + fmtMoney(net.toppedUp) + '）'
+                          : ''),
+                    )
                   : null,
                 net !== null && net.ok === true && net.drift !== null
                   ? h('span', { className: 'tcs-net' }, tr('drift') + ' ' + fmtSigned(net.drift.gap))
